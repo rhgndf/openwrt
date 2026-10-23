@@ -1,0 +1,40 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] net: ethernet: broadcom: add BCMBCA SYSTEMPORT v2 driver
+
+Add Kconfig / Makefile glue for the Broadcom BCA SYSTEMPORT v2
+Ethernet driver. The driver source is shipped in the target's files/
+directory.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+--- a/drivers/net/ethernet/broadcom/Kconfig
++++ b/drivers/net/ethernet/broadcom/Kconfig
+@@ -68,6 +68,18 @@
+ 	  This driver supports the ethernet MACs in the Broadcom 63xx
+ 	  MIPS chipset family (BCM63XX).
+ 
++config BCMBCA_SYSPORT
++	tristate "Broadcom BCMBCA SYSTEMPORT v2 support"
++	depends on ARCH_BCMBCA || COMPILE_TEST
++	depends on HAS_IOMEM && OF
++	select PHYLINK
++	select MDIO_BCM_UNIMAC
++	select BCM7XXX_PHY
++	help
++	  This driver supports the SYSTEMPORT v2 Ethernet controllers of
++	  Broadcom BCA SoCs. So far only the BCM47622 / BCM6755 is
++	  supported, including its shared GPHY / RGMII / MDIO control block.
++
+ config BCMGENET
+ 	tristate "Broadcom GENET internal MAC support"
+ 	depends on HAS_IOMEM
+--- a/drivers/net/ethernet/broadcom/Makefile
++++ b/drivers/net/ethernet/broadcom/Makefile
+@@ -6,6 +6,7 @@
+ obj-$(CONFIG_B44) += b44.o
+ obj-$(CONFIG_BCM4908_ENET) += bcm4908_enet.o
+ obj-$(CONFIG_BCM63XX_ENET) += bcm63xx_enet.o
++obj-$(CONFIG_BCMBCA_SYSPORT) += bcmbca_sysport.o
+ obj-$(CONFIG_BCMGENET) += genet/
+ obj-$(CONFIG_BNX2) += bnx2.o
+ obj-$(CONFIG_CNIC) += cnic.o

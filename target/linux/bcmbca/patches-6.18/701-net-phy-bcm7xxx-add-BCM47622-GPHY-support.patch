@@ -1,0 +1,113 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] net: phy: bcm7xxx: add BCM47622 GPHY support
+
+The internal Gigabit PHY of the BCM47622 / BCM6755 reports the PHY ID
+0xae0250f1. It needs the AFE setup and the R_CAL/RC_CAL reset of the
+Broadcom BCA SDK after every reset, otherwise it binds to the generic
+PHY driver without them.
+
+The PHY ID would make bcm7xxx_28nm_config_init() pick the revision 0x01
+settings, which differ, so add a BCA GPHY entry with its own config_init.
+The SDK uses the same settings for the BCM63158, BCM63178 and BCM6756
+GPHYs, those only need their PHY IDs added once known.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+--- a/drivers/net/phy/bcm7xxx.c
++++ b/drivers/net/phy/bcm7xxx.c
+@@ -140,6 +140,46 @@ static int bcm7xxx_28nm_a0_patch_afe_config_init(struct phy_device *phydev)
+ 	return 0;
+ }
+ 
++/*
++ * GPHY of the BCM47622 and, according to the Broadcom BCA SDK, of the
++ * BCM63158, BCM63178 and BCM6756. The SDK resets the PHY and then applies
++ * these settings. bcm7xxx_28nm_config_init() would pick the different
++ * revision 0x01 settings from the BCM47622 PHY ID.
++ */
++static int bcm47622_config_init(struct phy_device *phydev)
++{
++	/* Dummy read, see bcm7xxx_28nm_config_init() */
++	phy_read(phydev, MII_BMSR);
++
++	/* AFE_TX_CONFIG_0, turn off AOF */
++	bcm_phy_write_misc(phydev, 0x39, 0x1, 0x0000);
++
++	/* AFE_TX_CONFIG_1, 1000BT AB symmetry Iq */
++	bcm_phy_write_misc(phydev, 0x3a, 0x2, 0x0bcc);
++
++	/* AFE_TX_IQ_RX_LP, LPF bandwidth */
++	bcm_phy_write_misc(phydev, 0x39, 0x0, 0x233f);
++
++	/* AFE_TEMPSEN_OTHERS, RCAL +6 LSB for 100 instead of 112 Ohm */
++	bcm_phy_write_misc(phydev, 0x3b, 0x0, 0xad40);
++
++	/* DSP_TAP10, master current -4% as RCAL makes R smaller */
++	bcm_phy_write_misc(phydev, DSP_TAP10, 0x091b);
++
++	/* Change rx_on_tune 8 to 0xf */
++	bcm_phy_write_misc(phydev, 0x21, 0x2, 0x87f6);
++
++	/* Change 100Tx EEE bandwidth */
++	bcm_phy_write_misc(phydev, 0x22, 0x2, 0x017d);
++
++	/* Enable ffe zero detection for Vitesse interoperability */
++	bcm_phy_write_misc(phydev, 0x26, 0x2, 0x0015);
++
++	bcm_phy_r_rc_cal_reset(phydev);
++
++	return 0;
++}
++
+ static int bcm7xxx_28nm_config_init(struct phy_device *phydev)
+ {
+ 	u8 rev = PHY_BRCM_7XXX_REV(phydev->dev_flags);
+@@ -904,7 +944,30 @@ static int bcm7xxx_28nm_probe(struct phy_device *phydev)
+ 	.resume		= bcm7xxx_16nm_ephy_resume,			\
+ }
+ 
++/*
++ * 28nm GPHYs of BCA SoCs, set up as in the Broadcom BCA SDK: a reset and
++ * a SoC specific AFE setup in _config_init.
++ */
++#define BCM7XXX_28NM_BCA_GPHY(_oui, _name, _config_init)		\
++{									\
++	.phy_id		= (_oui),					\
++	.phy_id_mask	= 0xfffffff0,					\
++	.name		= _name,					\
++	/* PHY_GBIT_FEATURES */						\
++	.flags		= PHY_IS_INTERNAL,				\
++	.soft_reset	= genphy_soft_reset,				\
++	.config_init	= _config_init,					\
++	.suspend	= genphy_suspend,				\
++	.resume		= genphy_resume,				\
++	.get_sset_count	= bcm_phy_get_sset_count,			\
++	.get_strings	= bcm_phy_get_strings,				\
++	.get_stats	= bcm7xxx_28nm_get_phy_stats,			\
++	.probe		= bcm7xxx_28nm_probe,				\
++}
++
+ static struct phy_driver bcm7xxx_driver[] = {
++	BCM7XXX_28NM_BCA_GPHY(PHY_ID_BCM47622, "Broadcom BCM47622",
++			      bcm47622_config_init),
+ 	BCM7XXX_28NM_EPHY(PHY_ID_BCM72113, "Broadcom BCM72113"),
+ 	BCM7XXX_28NM_EPHY(PHY_ID_BCM72116, "Broadcom BCM72116"),
+ 	BCM7XXX_16NM_EPHY(PHY_ID_BCM72165, "Broadcom BCM72165"),
+@@ -930,6 +993,7 @@ static struct phy_driver bcm7xxx_driver[] = {
+ };
+ 
+ static const struct mdio_device_id __maybe_unused bcm7xxx_tbl[] = {
++	{ PHY_ID_BCM47622, 0xfffffff0 },
+ 	{ PHY_ID_BCM72113, 0xfffffff0 },
+ 	{ PHY_ID_BCM72116, 0xfffffff0, },
+ 	{ PHY_ID_BCM72165, 0xfffffff0, },
+--- a/include/linux/brcmphy.h
++++ b/include/linux/brcmphy.h
+@@ -32,6 +32,7 @@
+ #define PHY_ID_BCM57780			0x03625d90
+ #define PHY_ID_BCM89610			0x03625cd0
+ 
++#define PHY_ID_BCM47622			0xae0250f0
+ #define PHY_ID_BCM72113			0x35905310
+ #define PHY_ID_BCM72116			0x35905350
+ #define PHY_ID_BCM72165			0x35905340
