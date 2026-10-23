@@ -1,0 +1,22 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] gpio: mmio: use pinctrl backend if gpio-ranges is present
+
+On BCMBCA SoCs pins have to be switched to the GPIO function in the pin
+controller before they can be used as GPIOs. Let generic MMIO GPIO
+controllers described in DT request/free their pins from the pin
+controller when a "gpio-ranges" property is present.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+--- a/drivers/gpio/gpio-mmio.c
++++ b/drivers/gpio/gpio-mmio.c
+@@ -792,6 +792,9 @@
+ 	if (device_property_read_bool(dev, "no-output"))
+ 		flags |= GPIO_GENERIC_NO_OUTPUT;
+ 
++	if (device_property_present(dev, "gpio-ranges"))
++		flags |= GPIO_GENERIC_PINCTRL_BACKEND;
++
+ 	config = (struct gpio_generic_chip_config) {
+ 		.dev = dev,
+ 		.sz = sz,
