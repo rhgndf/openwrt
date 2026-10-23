@@ -1,0 +1,25 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] ARM: bcmbca: link Cortex-A7 kernels at TEXT_OFFSET 0x18000
+
+Broadcom CFE on BCM47622/BCM6755 (and siblings) decompresses an LZMA
+compressed raw kernel image to the load address from its header and
+passes its device tree at physical 0x8000, leaving about 32 KiB for it.
+With the default TEXT_OFFSET of 0x8000 the kernel and its initial page
+tables (0x4000-0x8000) would overwrite that device tree.
+
+Use TEXT_OFFSET 0x18000 like the vendor kernel does, so the initial page
+tables end up at 0x14000 and the device tree passed by CFE survives.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -160,6 +160,8 @@
+ # during boot, and this offset is critical to the functioning of
+ # kexec-tools.
+ textofs-y	:= 0x00008000
++# Broadcom CFE passes the DTB at 0x8000, keep the kernel clear of it
++textofs-$(CONFIG_ARCH_BCMBCA_CORTEXA7) := 0x00018000
+ # RTD1195 has Boot ROM at start of address space
+ textofs-$(CONFIG_ARCH_REALTEK)  := 0x00108000
+ # SA1111 DMA bug: we don't want the kernel to live in precious DMA-able memory
