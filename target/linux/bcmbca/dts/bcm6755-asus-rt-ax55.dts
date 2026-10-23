@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+#include "bcm47622-cfe.dtsi"
+
+/ {
+	model = "ASUS RT-AX55";
+	compatible = "asus,rt-ax55", "brcm,bcm6755", "brcm,bcm47622", "brcm,bcmbca";
+
+	aliases {
+		serial0 = &uart0;
+		led-boot = &led_power;
+		led-failsafe = &led_power;
+		led-running = &led_power;
+		led-upgrade = &led_power;
+		label-mac-device = &sysport1;
+	};
+
+	/*
+	 * CFE loads this DTB from the firmware's UBI "filestruct" volume, adds
+	 * brcm_blparms (used to find the booted firmware slot) and writes its
+	 * own root/ubi bootargs. CONFIG_CMDLINE_FORCE overrides those.
+	 */
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x10000000>;
+	};
+
+	/* The buttons' external interrupts have no kernel driver yet */
+	keys {
+		compatible = "gpio-keys-polled";
+		poll-interval = <20>;
+
+		button-reset {
+			label = "reset";
+			gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+			debounce-interval = <60>;
+		};
+
+		button-wps {
+			label = "wps";
+			gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+			debounce-interval = <60>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_power: led-power {
+			function = LED_FUNCTION_POWER;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+			default-state = "on";
+		};
+
+		led-wan {
+			function = LED_FUNCTION_WAN;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;
+		};
+
+		led-wan-red {
+			function = LED_FUNCTION_WAN;
+			color = <LED_COLOR_ID_RED>;
+			gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
+		};
+
+		led-lan {
+			function = LED_FUNCTION_LAN;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+		};
+
+		led-wlan-2g {
+			function = LED_FUNCTION_WLAN_2GHZ;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+		};
+
+		led-wlan-5g {
+			function = LED_FUNCTION_WLAN_5GHZ;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+		};
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&hsspi {
+	status = "okay";
+
+	flash@0 {
+		compatible = "spi-nand";
+		reg = <0>;
+		spi-max-frequency = <50000000>;
+
+		partitions {
+			compatible = "brcm,bcm4908-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "cferom";
+				reg = <0x0000000 0x0100000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					/* CFE NVRAM_DATA (0x10580) ucaBaseMacAddr */
+					base_mac_addr: mac@106a0 {
+						reg = <0x106a0 0x6>;
+					};
+				};
+			};
+
+			/*
+			 * Two pureUBI firmware slots. The parser names the one
+			 * CFE booted (from brcm_blparms NAND_RFS_OFS) "firmware",
+			 * the other one "backup".
+			 */
+			partition@100000 {
+				compatible = "brcm,bcm4908-firmware";
+				reg = <0x0100000 0x3300000>;
+			};
+
+			partition@3400000 {
+				compatible = "brcm,bcm4908-firmware";
+				reg = <0x3400000 0x3300000>;
+			};
+
+			/* ASUS partitions, defined by the CFE NVRAM */
+			partition@6700000 {
+				label = "misc1";
+				reg = <0x6700000 0x0400000>;
+				read-only;
+			};
+
+			partition@6b00000 {
+				label = "misc2";
+				reg = <0x6b00000 0x0f00000>;
+				read-only;
+			};
+
+			partition@7a00000 {
+				label = "misc3";
+				reg = <0x7a00000 0x0100000>;
+				read-only;
+			};
+
+			partition@7b00000 {
+				label = "asus-data";
+				reg = <0x7b00000 0x0400000>;
+				read-only;
+			};
+
+			/* 0x7f00000-0x8000000: reserved for the CFE bad block table */
+		};
+	};
+};
+
+/* RTL8367S RGMII pads, as programmed by the vendor bootloader */
+&pins_rgmii {
+	drive-strength = <14>;
+	power-source = <3300>;
+};
+
+&sysport_misc {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pins_rgmii &pins_rgmii_mdio>;
+
+	brcm,gphy-address = <8>;
+	brcm,rgmii-sysport = <1>;
+	brcm,rgmii-tx-delay;
+	status = "okay";
+};
+
+&mdio {
+	/* ASUS runs the bus at 2.5 MHz for the RTL8367S */
+	clock-frequency = <2500000>;
+
+	switch@29 {
+		compatible = "realtek,rtl8365mb";
+		reg = <29>;
+		reset-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
+
+		/* The realtek DSA driver needs this node for the internal PHYs */
+		mdio {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			swphy0: ethernet-phy@0 {
+				reg = <0>;
+			};
+
+			swphy1: ethernet-phy@1 {
+				reg = <1>;
+			};
+
+			swphy2: ethernet-phy@2 {
+				reg = <2>;
+			};
+
+			swphy3: ethernet-phy@3 {
+				reg = <3>;
+			};
+		};
+
+		ethernet-ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ethernet-port@0 {
+				reg = <0>;
+				label = "lan4";
+				phy-handle = <&swphy0>;
+			};
+
+			ethernet-port@1 {
+				reg = <1>;
+				label = "lan3";
+				phy-handle = <&swphy1>;
+			};
+
+			ethernet-port@2 {
+				reg = <2>;
+				label = "lan2";
+				phy-handle = <&swphy2>;
+			};
+
+			ethernet-port@3 {
+				reg = <3>;
+				label = "lan1";
+				phy-handle = <&swphy3>;
+			};
+
+			ethernet-port@7 {
+				reg = <7>;
+				ethernet = <&sysport1>;
+				phy-mode = "rgmii";
+				/* SoC delays its TX clock, the switch delays its TX clock */
+				tx-internal-delay-ps = <2000>;
+				rx-internal-delay-ps = <0>;
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
+			};
+		};
+	};
+};
+
+&sysport0 {
+	phy-mode = "gmii";
+	phy-handle = <&gphy>;
+	nvmem-cells = <&base_mac_addr>;
+	nvmem-cell-names = "mac-address";
+	openwrt,netdev-name = "wan";
+	status = "okay";
+};
+
+&sysport1 {
+	phy-mode = "rgmii";
+	nvmem-cells = <&base_mac_addr>;
+	nvmem-cell-names = "mac-address";
+	status = "okay";
+
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
+};
