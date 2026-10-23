@@ -1,0 +1,199 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/*
+ * BCM47622 / BCM6755 SoC additions on top of the upstream dtsi, for
+ * devices booted by Broadcom CFE (no PSCI firmware).
+ */
+
+#include "broadcom/bcm47622.dtsi"
+
+/ {
+	/delete-node/ psci;
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * Reserved like the stock DTB's /memreserve/ does: the secondary
+		 * CPUs wait in CFE's trampoline at 0x1000 until they are released
+		 * to the kernel.
+		 */
+		cfe@0 {
+			reg = <0x00000000 0x00008000>;
+		};
+
+		/* PMC3 firmware */
+		pmc3@4000000 {
+			reg = <0x04000000 0x00100000>;
+			no-map;
+		};
+	};
+
+	reboot {
+		compatible = "syscon-reboot";
+		regmap = <&twd>;
+		/* WDTIMER0 WDTimerCtl: SOFT_RESET */
+		offset = <0x8c>;
+		mask = <0x1>;
+		value = <0x1>;
+	};
+
+	bus@80400000 {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x80400000 0x120000>;
+
+		sysport0: ethernet@0 {
+			compatible = "brcm,bcm6755-systemport", "brcm,bcmbca-systemport-v2.0";
+			reg = <0x0 0x10000>;
+			/* SYSPORT0_0 (RX), SYSPORT0_1 (TX) */
+			interrupts = <GIC_SPI 96 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>;
+			status = "disabled";
+		};
+
+		sysport_misc: ethernet-misc@11000 {
+			compatible = "brcm,bcm6755-systemport-misc";
+			reg = <0x11000 0x400>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x0 0x11000 0x400>;
+			status = "disabled";
+
+			mdio: mdio@300 {
+				compatible = "brcm,unimac-mdio";
+				reg = <0x300 0x10>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				gphy: ethernet-phy@8 {
+					reg = <8>;
+				};
+			};
+		};
+
+		sysport1: ethernet@100000 {
+			compatible = "brcm,bcm6755-systemport", "brcm,bcmbca-systemport-v2.0";
+			reg = <0x100000 0x10000>;
+			/* SYSPORT1_0 (RX), SYSPORT1_1 (TX) */
+			interrupts = <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>;
+			status = "disabled";
+		};
+	};
+};
+
+&clocks {
+	wdt_clk: wdt-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <50000000>;
+	};
+};
+
+/*
+ * CFE parks the secondary cores in WFI; they jump to the address written to
+ * the GPIO GeneralPurpose register (0xff800568) once woken up by an SGI.
+ */
+&CA7_0 {
+	enable-method = "brcm,bca-smp";
+	cpu-release-addr = <0xff800568>;
+};
+
+&CA7_1 {
+	enable-method = "brcm,bca-smp";
+	cpu-release-addr = <0xff800568>;
+};
+
+&CA7_2 {
+	enable-method = "brcm,bca-smp";
+	cpu-release-addr = <0xff800568>;
+};
+
+&CA7_3 {
+	enable-method = "brcm,bca-smp";
+	cpu-release-addr = <0xff800568>;
+};
+
+&{/bus@ff800000} {
+	twd: timer-mfd@400 {
+		compatible = "brcm,bcm6755-twd", "simple-mfd", "syscon";
+		reg = <0x400 0x100>;
+		ranges = <0x0 0x400 0x100>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		watchdog@80 {
+			compatible = "brcm,bcm6345-wdt";
+			reg = <0x80 0x10>;
+			clocks = <&wdt_clk>;
+		};
+	};
+
+	/* GPIOs 0 .. 31 */
+	gpio0: gpio@500 {
+		compatible = "brcm,bcm6345-gpio";
+		reg = <0x500 0x04>, <0x520 0x04>;
+		reg-names = "dirout", "dat";
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&pinctrl 0 0 32>;
+	};
+
+	/* GPIOs 32 .. 63 */
+	gpio1: gpio@504 {
+		compatible = "brcm,bcm6345-gpio";
+		reg = <0x504 0x04>, <0x524 0x04>;
+		reg-names = "dirout", "dat";
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&pinctrl 0 32 32>;
+		status = "disabled";
+	};
+
+	/* GPIOs 64 .. 95 */
+	gpio2: gpio@508 {
+		compatible = "brcm,bcm6345-gpio";
+		reg = <0x508 0x04>, <0x528 0x04>;
+		reg-names = "dirout", "dat";
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&pinctrl 0 64 32>;
+		status = "disabled";
+	};
+
+	/* GPIOs 96 .. 107 */
+	gpio3: gpio@50c {
+		compatible = "brcm,bcm6345-gpio";
+		reg = <0x50c 0x04>, <0x52c 0x04>;
+		reg-names = "dirout", "dat";
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&pinctrl 0 96 12>;
+		status = "disabled";
+	};
+
+	pinctrl: pinctrl@540 {
+		compatible = "brcm,bcm6755-pinctrl";
+		reg = <0x540 0x20>;
+
+		pins_rgmii: rgmii-pins {
+			function = "rgmii";
+			groups = "rgmii_grp";
+		};
+
+		pins_rgmii_mdio: rgmii-mdio-pins {
+			mdc {
+				function = "a_rgmii_mdc";
+				groups = "a_rgmii_mdc_grp";
+			};
+
+			mdio {
+				function = "a_rgmii_mdio";
+				groups = "a_rgmii_mdio_grp";
+			};
+		};
+	};
+};
