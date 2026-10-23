@@ -1,0 +1,19 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] ARM: bcmbca: add SMP support for CFE booted Cortex-A7 SoCs
+
+Broadcom CFE on BCM47622 / BCM6755 doesn't provide PSCI. Secondary cores
+are parked in WFI and jump to the address stored in the GPIO
+"GeneralPurpose" register once they receive an SGI. Add a "brcm,bca-smp"
+enable-method implementing that protocol with a holding pen, similar to
+the one used by the vendor kernel.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+--- a/arch/arm/mach-bcm/Makefile
++++ b/arch/arm/mach-bcm/Makefile
+@@ -60,4 +60,5 @@
+ ifeq ($(CONFIG_ARCH_BCMBCA),y)
+ obj-$(CONFIG_DEBUG_BCMBCA)	+= board_bcmbca.o
+ obj-$(CONFIG_SMP)		+= bcm63xx_smp.o bcm63xx_pmb.o
++obj-$(CONFIG_SMP)		+= bcmbca_smp.o bcmbca_headsmp.o
+ endif
