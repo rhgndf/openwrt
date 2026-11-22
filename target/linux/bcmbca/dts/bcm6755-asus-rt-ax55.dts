@@ -55,33 +55,9 @@
 		};
 	};
 
+	/* The WLAN LEDs are not wired to LED controller capable pins */
 	leds {
 		compatible = "gpio-leds";
-
-		led_power: led-power {
-			function = LED_FUNCTION_POWER;
-			color = <LED_COLOR_ID_BLUE>;
-			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
-			default-state = "on";
-		};
-
-		led-wan {
-			function = LED_FUNCTION_WAN;
-			color = <LED_COLOR_ID_BLUE>;
-			gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;
-		};
-
-		led-wan-red {
-			function = LED_FUNCTION_WAN;
-			color = <LED_COLOR_ID_RED>;
-			gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
-		};
-
-		led-lan {
-			function = LED_FUNCTION_LAN;
-			color = <LED_COLOR_ID_BLUE>;
-			gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
-		};
 
 		led-wlan-2g {
 			function = LED_FUNCTION_WLAN_2GHZ;
@@ -173,6 +149,69 @@
 
 			/* 0x7f00000-0x8000000: reserved for the CFE bad block table */
 		};
+	};
+};
+
+&leds {
+	status = "okay";
+
+	led_power: led@5 {
+		reg = <5>;
+		function = LED_FUNCTION_POWER;
+		color = <LED_COLOR_ID_BLUE>;
+		active-low;
+		default-state = "on";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pins_led_05>;
+	};
+
+	led@7 {
+		reg = <7>;
+		function = LED_FUNCTION_WAN;
+		color = <LED_COLOR_ID_BLUE>;
+		active-low;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pins_led_07>;
+	};
+
+	led@b {
+		reg = <11>;
+		function = LED_FUNCTION_WAN;
+		color = <LED_COLOR_ID_RED>;
+		active-low;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pins_led_11>;
+	};
+
+	led@c {
+		reg = <12>;
+		function = LED_FUNCTION_LAN;
+		color = <LED_COLOR_ID_BLUE>;
+		active-low;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pins_led_12>;
+	};
+};
+
+&pinctrl {
+	pins_led_05: led-05-pins {
+		function = "a_per_led_05";
+		groups = "a_per_led_05_grp";
+	};
+
+	pins_led_07: led-07-pins {
+		function = "a_per_led_07";
+		groups = "a_per_led_07_grp";
+	};
+
+	pins_led_11: led-11-pins {
+		function = "a_per_led_11";
+		groups = "a_per_led_11_grp";
+	};
+
+	pins_led_12: led-12-pins {
+		function = "a_per_led_12";
+		groups = "a_per_led_12_grp";
 	};
 };
 

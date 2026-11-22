@@ -253,4 +253,12 @@
 			};
 		};
 	};
+
+	leds: led-controller@3000 {
+		compatible = "brcm,bcm6755-leds";
+		reg = <0x3000 0x458>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
 };

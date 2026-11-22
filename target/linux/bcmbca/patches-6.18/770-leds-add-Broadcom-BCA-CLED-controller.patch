@@ -1,0 +1,50 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] leds: add Broadcom BCA CLED controller
+
+Newer Broadcom BCA SoCs like BCM47622 have an LED controller that is
+not register compatible with the one handled by leds-bcm63138: every
+LED has its own configuration block holding the brightness and the
+flash rate, which takes effect once the LED is activated. Add a driver
+for its parallel LEDs.
+
+The driver itself lives in target/linux/bcmbca/files.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/leds/blink/Kconfig  | 17 +++++++++++++++++
+ drivers/leds/blink/Makefile |  1 +
+ 2 files changed, 18 insertions(+)
+
+--- a/drivers/leds/blink/Kconfig
++++ b/drivers/leds/blink/Kconfig
+@@ -12,6 +12,23 @@
+ 
+ 	  If compiled as module it will be called leds-bcm63138.
+ 
++config LEDS_BCMBCA_CLED
++	tristate "LED support for the Broadcom BCA CLED controller"
++	depends on LEDS_CLASS
++	depends on ARCH_BCMBCA || COMPILE_TEST
++	depends on HAS_IOMEM
++	depends on OF
++	default ARCH_BCMBCA
++	help
++	  This option enables support for the "CLED" LED controller found in
++	  newer Broadcom BCA SoCs such as BCM47622. Its register layout differs
++	  from the controller supported by LEDS_BCM63138.
++
++	  Parallel LEDs with software brightness control and hardware
++	  blinking are supported.
++
++	  If compiled as module it will be called leds-bcmbca-cled.
++
+ config LEDS_LGM
+        tristate "LED support for LGM SoC series"
+        depends on X86 || COMPILE_TEST
+--- a/drivers/leds/blink/Makefile
++++ b/drivers/leds/blink/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-$(CONFIG_LEDS_BCM63138)	+= leds-bcm63138.o
++obj-$(CONFIG_LEDS_BCMBCA_CLED)	+= leds-bcmbca-cled.o
+ obj-$(CONFIG_LEDS_LGM)	+= leds-lgm-sso.o
