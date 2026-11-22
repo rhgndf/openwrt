@@ -38,6 +38,9 @@ Flags:
 	0x00000001: PMC
 	0x00000002: Secure BootROM
 
+The tag is big endian, or little endian with --little-endian (ARM based
+BCA SoCs).
+
 """
 
 import argparse
@@ -54,7 +57,7 @@ def create_tag(args, in_bytes):
     # JAM CRC32 is bitwise not and unsigned
     crc = ~binascii.crc32(in_bytes) & 0xFFFFFFFF
     tag = struct.pack(
-        ">IIIII",
+        "<IIIII" if args.little_endian else ">IIIII",
         crc,
         args.tag_version,
         args.chip_id,
@@ -127,6 +130,13 @@ def main():
 
     parser.add_argument(
         "--flags", dest="flags", action="store", type=auto_int, help="WFI Flags"
+    )
+
+    parser.add_argument(
+        "--little-endian",
+        dest="little_endian",
+        action="store_true",
+        help="Write a little endian tag",
     )
 
     args = parser.parse_args()
