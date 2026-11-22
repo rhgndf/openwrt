@@ -6,6 +6,9 @@
 
 #include "broadcom/bcm47622.dtsi"
 
+#include <dt-bindings/clock/brcm,bcm6755-pmb.h>
+#include <dt-bindings/reset/brcm,bcm6755-pmb.h>
+
 / {
 	/delete-node/ psci;
 
@@ -37,6 +40,43 @@
 		offset = <0x8c>;
 		mask = <0x1>;
 		value = <0x1>;
+	};
+
+	/* PMC3 complex; the Power Management Bus is in Procmon */
+	system-controller@80300000 {
+		compatible = "brcm,bcm6755-pmc", "simple-mfd";
+		ranges = <0x0 0x80300000 0x21000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		bus@20100 {
+			compatible = "brcm,bcm6755-pmb";
+			reg = <0x20100 0x200>;
+
+			pmb_clk: clock-controller {
+				compatible = "brcm,bcm6755-pmb-clock";
+				clocks = <&refclk50mhz>;
+				clock-names = "ref";
+				#clock-cells = <1>;
+			};
+
+			pvtmon: hwmon {
+				compatible = "brcm,bcm6755-pmb-pvtmon";
+				clocks = <&pmb_clk BCM6755_CLK_PVTMON>;
+				resets = <&pmb_reset BCM6755_RESET_PVTMON>;
+				#thermal-sensor-cells = <0>;
+			};
+
+			pmb_power: power-controller {
+				compatible = "brcm,bcm6755-pmb-power";
+				#power-domain-cells = <1>;
+			};
+
+			pmb_reset: reset-controller {
+				compatible = "brcm,bcm6755-pmb-reset";
+				#reset-cells = <1>;
+			};
+		};
 	};
 
 	bus@80400000 {
@@ -86,7 +126,8 @@
 };
 
 &clocks {
-	wdt_clk: wdt-clk {
+	/* 50 MHz crystal */
+	refclk50mhz: clock-50000000 {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <50000000>;
@@ -144,7 +185,7 @@
 		watchdog@80 {
 			compatible = "brcm,bcm6345-wdt";
 			reg = <0x80 0x10>;
-			clocks = <&wdt_clk>;
+			clocks = <&refclk50mhz>;
 		};
 	};
 
