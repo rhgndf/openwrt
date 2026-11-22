@@ -1,0 +1,34 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - reject a CCM IV with an invalid length field
+
+The first byte of a CCM IV holds L' = L - 1, which must be 1 to 7.
+The generic implementation rejects other values with -EINVAL. The
+driver masks the byte to its low three bits and encrypts with the
+resulting length field instead:
+
+  alg: aead: ccm-aes-iproc encryption unexpectedly succeeded on test
+  vector "random: alen=0 plen=445 authsize=16 klen=32 novrfy=0";
+  expected_error=-22, ...
+
+Reject these IVs. rfc4309 builds its own IV with a fixed L and is not
+affected.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2716,6 +2716,10 @@ static int aead_enqueue(struct aead_request *req, bool is_encrypt)
+ 	if (ctx->is_esp && crypto_ipsec_check_assoclen(req->assoclen))
+ 		return -EINVAL;
+ 
++	if (ctx->cipher.mode == CIPHER_MODE_CCM && !ctx->is_esp &&
++	    (req->iv[0] < 1 || req->iv[0] > 7))
++		return -EINVAL;
++
+ 	rctx->gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
+ 		       GFP_KERNEL : GFP_ATOMIC;
+ 	rctx->parent = &req->base;

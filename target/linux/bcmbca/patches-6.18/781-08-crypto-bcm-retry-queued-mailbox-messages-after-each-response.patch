@@ -1,0 +1,47 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - retry queued mailbox messages after each response
+
+The PDC mailbox returns -ENOSPC from send_data when its rings are full.
+The mailbox framework then keeps the message queued and tries it again
+only when the next tx done is signalled. This driver signals tx done
+itself, in mailbox_send_message() right after each send. A message that
+did not fit therefore waits for another request to be sent. If none
+comes, for example at the end of a burst, the request never completes.
+
+Each response frees ring space. Signal tx done when a request completes,
+so the framework sends the next queued message. A request that sends
+another chunk already signals tx done in mailbox_send_message().
+
+Fixes: f0e2ce58f853 ("crypto: brcm - Explicity ACK mailbox message")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1652,6 +1652,7 @@ static void spu_rx_callback(struct mbox_client *cl, void *msg)
+ 	struct spu_hw *spu = &iproc_priv.spu;
+ 	struct brcm_message *mssg = msg;
+ 	struct iproc_reqctx_s *rctx;
++	u8 chan_idx;
+ 	int err;
+ 
+ 	rctx = mssg->ctx;
+@@ -1660,6 +1661,7 @@ static void spu_rx_callback(struct mbox_client *cl, void *msg)
+ 		pr_err("%s(): no request context", __func__);
+ 		return;
+ 	}
++	chan_idx = rctx->chan_idx;
+ 
+ 	err = mssg->error;
+ 	if (unlikely(err))
+@@ -1727,6 +1729,8 @@ static void spu_rx_callback(struct mbox_client *cl, void *msg)
+ 
+ cb_finish:
+ 	finish_req(rctx, err);
++
++	mbox_client_txdone(iproc_priv.mbox[chan_idx], 0);
+ }
+ 
+ /* ==================== Kernel Cryptographic API ==================== */

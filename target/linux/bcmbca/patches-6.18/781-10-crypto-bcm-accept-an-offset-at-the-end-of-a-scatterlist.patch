@@ -1,0 +1,34 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - accept an offset at the end of a scatterlist
+
+aead_enqueue() looks up the start of the data with spu_sg_at_offset()
+at req->assoclen. When the request has no data and src holds just the
+associated data, as in an out-of-place GCM encryption of an empty
+message with no associated data, that offset is the end of the list.
+spu_sg_at_offset() then walks past the last entry and returns -EINVAL,
+so the request fails:
+
+  alg: aead: gcm-aes-iproc encryption failed on test vector 0;
+  expected_error=0, actual_error=-22, cfg="out-of-place"
+
+Return the last entry, with the offset at its end, when the distance
+equals the length of the list. Callers then find no data there, and
+spu_sg_count() counts no entries for it.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/util.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+--- a/drivers/crypto/bcm/util.c
++++ b/drivers/crypto/bcm/util.c
+@@ -34,6 +34,8 @@ int spu_sg_at_offset(struct scatterlist *sg, unsigned int skip,
+ 
+ 	next_index = sg->length;
+ 	while (next_index <= skip) {
++		if (next_index == skip && sg_is_last(sg))
++			break;
+ 		sg = sg_next(sg);
+ 		index = next_index;
+ 		if (!sg)

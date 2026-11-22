@@ -1,0 +1,90 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - use a block size of 1 for CTR and the GCM/CCM AEADs
+
+ctr(aes), gcm(aes), ccm(aes), rfc4106(gcm(aes)), rfc4309(ccm(aes)) and
+rfc4543(gcm(aes)) are stream modes. Their generic implementations have
+a block size of 1, but this driver declares 16. The extra self-tests
+compare the two and fail every one of these algorithms with "blocksize
+... doesn't match generic impl".
+
+Declare a block size of 1. generic_cra_init() also uses the block size
+to round the maximum chunk length down. CTR requests are split into
+chunks of that length, so each chunk must still hold whole AES blocks.
+Keep computing the limit with the AES block size for these modes, so the
+chunk lengths and the AEAD fallback limit do not change.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -3072,7 +3072,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 		 .base = {
+ 			.cra_name = "gcm(aes)",
+ 			.cra_driver_name = "gcm-aes-iproc",
+-			.cra_blocksize = AES_BLOCK_SIZE,
++			.cra_blocksize = 1,
+ 			.cra_flags = CRYPTO_ALG_NEED_FALLBACK
+ 		 },
+ 		 .setkey = aead_gcm_ccm_setkey,
+@@ -3095,7 +3095,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 		 .base = {
+ 			.cra_name = "ccm(aes)",
+ 			.cra_driver_name = "ccm-aes-iproc",
+-			.cra_blocksize = AES_BLOCK_SIZE,
++			.cra_blocksize = 1,
+ 			.cra_flags = CRYPTO_ALG_NEED_FALLBACK
+ 		 },
+ 		 .setkey = aead_gcm_ccm_setkey,
+@@ -3118,7 +3118,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 		 .base = {
+ 			.cra_name = "rfc4106(gcm(aes))",
+ 			.cra_driver_name = "gcm-aes-esp-iproc",
+-			.cra_blocksize = AES_BLOCK_SIZE,
++			.cra_blocksize = 1,
+ 			.cra_flags = CRYPTO_ALG_NEED_FALLBACK
+ 		 },
+ 		 .setkey = aead_gcm_esp_setkey,
+@@ -3141,7 +3141,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 		 .base = {
+ 			.cra_name = "rfc4309(ccm(aes))",
+ 			.cra_driver_name = "ccm-aes-esp-iproc",
+-			.cra_blocksize = AES_BLOCK_SIZE,
++			.cra_blocksize = 1,
+ 			.cra_flags = CRYPTO_ALG_NEED_FALLBACK
+ 		 },
+ 		 .setkey = aead_ccm_esp_setkey,
+@@ -3164,7 +3164,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 		 .base = {
+ 			.cra_name = "rfc4543(gcm(aes))",
+ 			.cra_driver_name = "gmac-aes-esp-iproc",
+-			.cra_blocksize = AES_BLOCK_SIZE,
++			.cra_blocksize = 1,
+ 			.cra_flags = CRYPTO_ALG_NEED_FALLBACK
+ 		 },
+ 		 .setkey = rfc4543_gcm_esp_setkey,
+@@ -3677,7 +3677,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 	 .alg.skcipher = {
+ 			.base.cra_name = "ctr(aes)",
+ 			.base.cra_driver_name = "ctr-aes-iproc",
+-			.base.cra_blocksize = AES_BLOCK_SIZE,
++			.base.cra_blocksize = 1,
+ 			.min_keysize = AES_MIN_KEY_SIZE,
+ 			.max_keysize = AES_MAX_KEY_SIZE,
+ 			.ivsize = AES_BLOCK_SIZE,
+@@ -4141,6 +4141,12 @@ static int generic_cra_init(struct crypto_tfm *tfm,
+ 	ctx->cipher = cipher_alg->cipher_info;
+ 	ctx->auth = cipher_alg->auth_info;
+ 	ctx->auth_first = cipher_alg->auth_first;
++
++	if (ctx->cipher.mode == CIPHER_MODE_CTR ||
++	    ctx->cipher.mode == CIPHER_MODE_GCM ||
++	    ctx->cipher.mode == CIPHER_MODE_CCM)
++		blocksize = AES_BLOCK_SIZE;
++
+ 	ctx->max_payload = spu->spu_ctx_max_payload(ctx->cipher.alg,
+ 						    ctx->cipher.mode,
+ 						    blocksize);

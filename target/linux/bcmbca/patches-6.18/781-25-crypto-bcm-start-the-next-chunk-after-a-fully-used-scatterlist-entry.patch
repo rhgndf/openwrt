@@ -1,0 +1,43 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - start the next chunk after a fully used scatterlist entry
+
+The driver splits a request larger than max_payload into several SPU
+messages and keeps its place in the source and destination
+scatterlists with spu_msg_sg_add(). When a message ends exactly at the
+end of a scatterlist entry, spu_msg_sg_add() leaves from_sg on that
+entry with from_skip 0 instead of moving to the next entry. The next
+message then reads or writes the entry that was just used up, again
+from its start.
+
+On BCM6755, an AF_ALG encryption of 200000 bytes through
+ecb-aes-iproc, cbc-aes-iproc or ctr-aes-iproc into a buffer at page
+offset 0x30 hits this. The third 65520-byte message ends on a page
+boundary of the destination, so the fourth message's output lands 4096
+bytes early, at offset 192464 instead of 196560, and the last 3440
+bytes of the result are never written. The same happens at 262144 and
+300000 bytes. Decryption into a buffer at another page offset is
+correct.
+
+Move to the next entry when the copy ends on an entry boundary.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/util.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+--- a/drivers/crypto/bcm/util.c
++++ b/drivers/crypto/bcm/util.c
+@@ -161,8 +161,11 @@ u32 spu_msg_sg_add(struct scatterlist **to_sg,
+ 			/* used up all of from entry */
+ 			skip = 0;	/* start at beginning of next entry */
+ 		}
+-		if (copied == length)
++		if (copied == length) {
++			if (frag_len == entry_len)
++				sg = sg_next(sg);
+ 			break;
++		}
+ 	}
+ 	*to_sg = to;
+ 	*from_sg = sg;

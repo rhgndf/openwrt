@@ -1,0 +1,45 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - hash a long AES-XCBC digest in software on SPU-M
+
+SPU-M cannot continue an AES-XCBC MAC across messages, so ahash_init(),
+ahash_update() and ahash_finup() hash it in software when
+spu_no_incr_hash() says so. ahash_digest() always goes to the hardware,
+and handle_ahash_req() splits a digest longer than max_payload (65520
+bytes for AES-XCBC) into several SPU messages. Each message starts a
+new MAC under the original key, and the digest returned is the MAC of
+the last chunk alone. On BCM6755, an AF_ALG digest through
+xcbc-aes-iproc of 65521 or 65536 bytes gives the wrong MAC, while
+65519 and 65520 bytes are correct.
+
+Take the software path for a digest that does not fit in one message.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2339,10 +2339,21 @@ ahash_finup_exit:
+ 
+ static int ahash_digest(struct ahash_request *req)
+ {
++	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
++	struct iproc_ctx_s *ctx = crypto_ahash_ctx(tfm);
+ 	int err;
+ 
+ 	flow_log("ahash_digest() nbytes:%u\n", req->nbytes);
+ 
++	if (spu_no_incr_hash(ctx) &&
++	    (ctx->max_payload != SPU_MAX_PAYLOAD_INF) &&
++	    (req->nbytes > ctx->max_payload)) {
++		err = ahash_init(req);
++		if (!err)
++			err = ahash_finup(req);
++		return err;
++	}
++
+ 	/* whole thing at once */
+ 	err = __ahash_init(req);
+ 	if (!err)

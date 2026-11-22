@@ -1,0 +1,129 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - compute the HMAC outer hash without sleeping
+
+On SPU-M the hardware computes only the inner hash of an HMAC, and
+ahash_req_done() computes the outer hash in software with do_shash().
+do_shash() allocates a shash transform and a descriptor with GFP_KERNEL,
+but ahash_req_done() runs in the mailbox receive callback, which the PDC
+mailbox calls from softirq context.
+
+The crypto self-tests hit this on BCM47622 with "BUG: scheduling while
+atomic" from crypto_alloc_shash() in spu_rx_callback(), followed by
+corrupted rwsem wait lists and a hang.
+
+Compute the outer hash with the hash library functions instead. They
+neither allocate memory nor sleep, and they wipe their state when done.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/Kconfig      |  4 +++
+ drivers/crypto/bcm/cipher.c | 56 ++++++++++++++++++++++++-------------
+ 2 files changed, 41 insertions(+), 19 deletions(-)
+
+--- a/drivers/crypto/Kconfig
++++ b/drivers/crypto/Kconfig
+@@ -768,6 +768,10 @@ config CRYPTO_DEV_BCM_SPU
+ 	default m
+ 	select CRYPTO_AUTHENC
+ 	select CRYPTO_LIB_DES
++	select CRYPTO_LIB_MD5
++	select CRYPTO_LIB_SHA1
++	select CRYPTO_LIB_SHA256
++	select CRYPTO_LIB_SHA512
+ 	select CRYPTO_MD5
+ 	select CRYPTO_SHA1
+ 	select CRYPTO_SHA256
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -910,14 +910,13 @@ static int handle_ahash_req(struct iproc_reqctx_s *rctx)
+ }
+ 
+ /**
+- * spu_hmac_outer_hash() - Request synchonous software compute of the outer hash
+- * for an HMAC request.
++ * spu_hmac_outer_hash() - Compute the outer hash of an HMAC request in
++ * software.
+  * @req:  The HMAC request from the crypto API
+  * @ctx:  The session context
+  *
+- * Return: 0 if synchronous hash operation successful
++ * Return: 0 if successful
+  *         -EINVAL if the hash algo is unrecognized
+- *         any other value indicates an error
+  */
+ static int spu_hmac_outer_hash(struct ahash_request *req,
+ 			       struct iproc_ctx_s *ctx)
+@@ -925,38 +924,57 @@ static int spu_hmac_outer_hash(struct ahash_request *req,
+ 	struct crypto_ahash *ahash = crypto_ahash_reqtfm(req);
+ 	unsigned int blocksize =
+ 		crypto_tfm_alg_blocksize(crypto_ahash_tfm(ahash));
+-	int rc;
++	union {
++		struct md5_ctx md5;
++		struct sha1_ctx sha1;
++		struct sha224_ctx sha224;
++		struct sha256_ctx sha256;
++		struct sha384_ctx sha384;
++		struct sha512_ctx sha512;
++	} hctx;
+ 
+ 	switch (ctx->auth.alg) {
+ 	case HASH_ALG_MD5:
+-		rc = do_shash("md5", req->result, ctx->opad, blocksize,
+-			      req->result, ctx->digestsize, NULL, 0);
++		md5_init(&hctx.md5);
++		md5_update(&hctx.md5, ctx->opad, blocksize);
++		md5_update(&hctx.md5, req->result, ctx->digestsize);
++		md5_final(&hctx.md5, req->result);
+ 		break;
+ 	case HASH_ALG_SHA1:
+-		rc = do_shash("sha1", req->result, ctx->opad, blocksize,
+-			      req->result, ctx->digestsize, NULL, 0);
++		sha1_init(&hctx.sha1);
++		sha1_update(&hctx.sha1, ctx->opad, blocksize);
++		sha1_update(&hctx.sha1, req->result, ctx->digestsize);
++		sha1_final(&hctx.sha1, req->result);
+ 		break;
+ 	case HASH_ALG_SHA224:
+-		rc = do_shash("sha224", req->result, ctx->opad, blocksize,
+-			      req->result, ctx->digestsize, NULL, 0);
++		sha224_init(&hctx.sha224);
++		sha224_update(&hctx.sha224, ctx->opad, blocksize);
++		sha224_update(&hctx.sha224, req->result, ctx->digestsize);
++		sha224_final(&hctx.sha224, req->result);
+ 		break;
+ 	case HASH_ALG_SHA256:
+-		rc = do_shash("sha256", req->result, ctx->opad, blocksize,
+-			      req->result, ctx->digestsize, NULL, 0);
++		sha256_init(&hctx.sha256);
++		sha256_update(&hctx.sha256, ctx->opad, blocksize);
++		sha256_update(&hctx.sha256, req->result, ctx->digestsize);
++		sha256_final(&hctx.sha256, req->result);
+ 		break;
+ 	case HASH_ALG_SHA384:
+-		rc = do_shash("sha384", req->result, ctx->opad, blocksize,
+-			      req->result, ctx->digestsize, NULL, 0);
++		sha384_init(&hctx.sha384);
++		sha384_update(&hctx.sha384, ctx->opad, blocksize);
++		sha384_update(&hctx.sha384, req->result, ctx->digestsize);
++		sha384_final(&hctx.sha384, req->result);
+ 		break;
+ 	case HASH_ALG_SHA512:
+-		rc = do_shash("sha512", req->result, ctx->opad, blocksize,
+-			      req->result, ctx->digestsize, NULL, 0);
++		sha512_init(&hctx.sha512);
++		sha512_update(&hctx.sha512, ctx->opad, blocksize);
++		sha512_update(&hctx.sha512, req->result, ctx->digestsize);
++		sha512_final(&hctx.sha512, req->result);
+ 		break;
+ 	default:
+ 		pr_err("%s() Error : unknown hmac type\n", __func__);
+-		rc = -EINVAL;
++		return -EINVAL;
+ 	}
+-	return rc;
++	return 0;
+ }
+ 
+ /**

@@ -1,0 +1,32 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - check the associated data length of ESP requests
+
+The generic rfc4106, rfc4543 and rfc4309 templates reject a request
+whose associated data, which includes the IV, is neither 16 nor 20
+bytes long. The driver sends any length to the SPU, and the result
+differs from the generic one:
+
+  alg: aead: gmac-aes-esp-iproc encryption unexpectedly succeeded on
+  test vector "random: alen=0 plen=128 authsize=16 klen=20 novrfy=0";
+  expected_error=-22, ...
+
+Reject it with crypto_ipsec_check_assoclen().
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2686,6 +2686,9 @@ static int aead_enqueue(struct aead_request *req, bool is_encrypt)
+ 		return -EINVAL;
+ 	}
+ 
++	if (ctx->is_esp && crypto_ipsec_check_assoclen(req->assoclen))
++		return -EINVAL;
++
+ 	rctx->gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
+ 		       GFP_KERNEL : GFP_ATOMIC;
+ 	rctx->parent = &req->base;

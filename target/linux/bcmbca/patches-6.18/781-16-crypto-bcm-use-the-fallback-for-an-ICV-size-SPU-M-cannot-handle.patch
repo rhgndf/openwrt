@@ -1,0 +1,35 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - use the fallback for an ICV size SPU-M cannot handle
+
+SPU-M takes the ICV size in 32-bit words, so the driver truncates a
+digest size that is not a multiple of 4. The SPU then inserts or
+checks a shorter ICV than requested:
+
+  alg: aead: gcm-aes-iproc encryption test failed (wrong result) on
+  test vector "random: alen=131 plen=3965 authsize=15 klen=32
+  novrfy=0", ...
+
+Use the fallback for these digest sizes on SPU-M. All the AEADs have
+one.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2608,6 +2608,12 @@ static int aead_need_fallback(struct aead_request *req)
+ 		return 1;
+ 	}
+ 
++	if ((spu->spu_type == SPU_TYPE_SPUM) && (ctx->digestsize % 4)) {
++		flow_log("%s() SPU-M needs fallback for digest size %d\n",
++			 __func__, ctx->digestsize);
++		return 1;
++	}
++
+ 	/*
+ 	 * SPU-M on NSP has an issue where AES-CCM hash is not correct
+ 	 * when AAD size is 0

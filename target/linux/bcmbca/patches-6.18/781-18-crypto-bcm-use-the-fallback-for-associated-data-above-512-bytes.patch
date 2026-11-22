@@ -1,0 +1,37 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - use the fallback for associated data above 512 bytes
+
+The response buffer for the associated data holds MAX_ASSOC_SIZE
+bytes, so the driver fails a request with more:
+
+  aead_enqueue() Error: associated data too long. (3346 > 512 bytes)
+  alg: aead: gcm-aes-iproc encryption failed on test vector "random:
+  alen=675 plen=5465 authsize=16 klen=32 novrfy=0"; expected_error=0,
+  actual_error=-22, ...
+
+The other implementations accept any length. Send such a request to
+the fallback, which all the AEADs have.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2716,12 +2716,8 @@ static int aead_enqueue(struct aead_request *req, bool is_encrypt)
+ 
+ 	flow_log("%s() enc:%u\n", __func__, is_encrypt);
+ 
+-	if (req->assoclen > MAX_ASSOC_SIZE) {
+-		pr_err
+-		    ("%s() Error: associated data too long. (%u > %u bytes)\n",
+-		     __func__, req->assoclen, MAX_ASSOC_SIZE);
+-		return -EINVAL;
+-	}
++	if (req->assoclen > MAX_ASSOC_SIZE)
++		return aead_do_fallback(req, is_encrypt);
+ 
+ 	if (ctx->is_esp && crypto_ipsec_check_assoclen(req->assoclen))
+ 		return -EINVAL;

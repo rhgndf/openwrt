@@ -1,0 +1,41 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] mailbox: bcm-pdc: return messages that end in a receive error
+
+For SPU-M, pdc_receive_one() checks the receive status that the DMA
+engine writes in front of each response. On an overflow or a zero length
+it returns -EIO. By then it has already reclaimed the message's
+descriptors and unmapped its buffers, but it never frees the status
+buffer or passes the message back to the client. The request that sent
+the message never completes, and its caller waits forever.
+pdc_receive() also stops at the error, so responses behind it wait for
+the next interrupt.
+
+Free the status buffer and return the message with mssg.error set to
+-EIO. Set mssg.error to 0 for a good response: mssg is on the stack and
+its error field is not initialized.
+
+Fixes: a24532f8d17b ("mailbox: Add Broadcom PDC mailbox driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/mailbox/bcm-pdc-mailbox.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+--- a/drivers/mailbox/bcm-pdc-mailbox.c
++++ b/drivers/mailbox/bcm-pdc-mailbox.c
+@@ -633,6 +633,7 @@ pdc_receive_one(struct pdc_state *pdcs)
+ 		pdcs->pdc_idx, pdcs->txin, pdcs->txout, pdcs->rxin,
+ 		pdcs->rxout, pdcs->last_rx_curr);
+ 
++	mssg.error = 0;
+ 	if (pdcs->pdc_resp_hdr_len == PDC_SPUM_RESP_HDR_LEN) {
+ 		/*
+ 		 * For SPU-M, get length of response msg and rx overflow status.
+@@ -649,7 +650,7 @@ pdc_receive_one(struct pdc_state *pdcs)
+ 			} else {
+ 				dev_info_ratelimited(dev, "crypto rx len = 0");
+ 			}
+-			return -EIO;
++			mssg.error = -EIO;
+ 		}
+ 	}
+ 

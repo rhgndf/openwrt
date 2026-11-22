@@ -42,6 +42,22 @@
 		value = <0x1>;
 	};
 
+	/* SPU crypto engine and its DMA ring manager */
+	pdc: mailbox@8001c000 {
+		compatible = "brcm,iproc-pdc-mbox";
+		reg = <0x8001c000 0x448>;
+		interrupts = <GIC_SPI 91 IRQ_TYPE_LEVEL_HIGH>;
+		#mbox-cells = <1>;
+		brcm,rx-status-len = <4>;
+		brcm,use-bcm-hdr;
+	};
+
+	crypto@8001d000 {
+		compatible = "brcm,spum-crypto";
+		reg = <0x8001d000 0x64>;
+		mboxes = <&pdc 0>;
+	};
+
 	/* PMC3 complex; the Power Management Bus is in Procmon */
 	system-controller@80300000 {
 		compatible = "brcm,bcm6755-pmc", "simple-mfd";

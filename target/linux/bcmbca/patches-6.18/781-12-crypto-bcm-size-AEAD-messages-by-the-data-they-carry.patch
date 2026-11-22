@@ -1,0 +1,157 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - size AEAD messages by the data they carry
+
+GCM and CCM decryption send the ICV at the end of the chunk in a
+separate buffer, and the response does not return it in the data. But
+handle_aead_req() counts the src and dst entries of the whole chunk,
+ICV included, so the message tables get entries they never use.
+
+spu_aead_tx_sg_create() also subtracts the ICV from the data only when
+the chunk is longer than the ICV. A decryption of an empty message
+then sends the ICV twice, once as data and once as the ICV.
+
+Work out the data length once, without the ICV when it is sent
+separately, and use it to count the src and dst entries, to fill in
+the src data and as the response length. crypto_aead_decrypt() has
+already rejected a chunk shorter than the ICV. With no data,
+spu_sg_count() counts no dst entries, so the special case for an
+empty response can go.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 46 +++++++++++++++----------------------
+ 1 file changed, 19 insertions(+), 27 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1193,7 +1193,7 @@ static int spu_aead_rx_sg_create(struct brcm_message *mssg,
+  * @assoc_len:	length of associated data
+  * @assoc_nents: number of scatterlist entries containing assoc data
+  * @aead_iv_len: length of AEAD IV, if included
+- * @chunksize:	Number of bytes of request data
++ * @datalen:	Number of bytes of request data
+  * @aad_pad_len: Number of bytes of padding at end of AAD. For GCM/CCM.
+  * @pad_len:	Number of pad bytes
+  * @incl_icv:	If true, write separate ICV buffer after data and
+@@ -1215,14 +1215,13 @@ static int spu_aead_tx_sg_create(struct brcm_message *mssg,
+ 				 unsigned int assoc_len,
+ 				 int assoc_nents,
+ 				 unsigned int aead_iv_len,
+-				 unsigned int chunksize,
++				 unsigned int datalen,
+ 				 u32 aad_pad_len, u32 pad_len, bool incl_icv)
+ {
+ 	struct spu_hw *spu = &iproc_priv.spu;
+ 	struct scatterlist *sg;	/* used to build sgs in mbox message */
+ 	struct scatterlist *assoc_sg = assoc;
+ 	struct iproc_ctx_s *ctx = rctx->ctx;
+-	u32 datalen;		/* Number of bytes of data to write */
+ 	u32 written;		/* Number of bytes of data written */
+ 	u32 assoc_offset = 0;
+ 	u32 stat_len;
+@@ -1257,9 +1256,6 @@ static int spu_aead_tx_sg_create(struct brcm_message *mssg,
+ 		sg_set_buf(sg++, rctx->msg_buf.a.req_aad_pad, aad_pad_len);
+ 	}
+ 
+-	datalen = chunksize;
+-	if ((chunksize > ctx->digestsize) && incl_icv)
+-		datalen -= ctx->digestsize;
+ 	if (datalen) {
+ 		/* For aead, a single msg should consume the entire src sg */
+ 		written = spu_msg_sg_add(&sg, &rctx->src_sg, &rctx->src_skip,
+@@ -1314,7 +1310,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	struct iproc_ctx_s *ctx = rctx->ctx;
+ 	int err;
+ 	unsigned int chunksize;
+-	unsigned int resp_len;
++	unsigned int datalen;
+ 	u32 spu_hdr_len;
+ 	u32 db_size;
+ 	u32 stat_pad_len;
+@@ -1325,7 +1321,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	struct spu_hash_parms hash_parms;
+ 	struct spu_aead_parms aead_parms;
+ 	int assoc_nents = 0;
+-	bool incl_icv = false;
++	bool incl_icv;
+ 	unsigned int digestsize = ctx->digestsize;
+ 
+ 	/* number of entries in src and dst sg. Always includes SPU msg header.
+@@ -1384,14 +1380,24 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 		aead_parms.ret_iv_len = 0;
+ 	}
+ 
++	incl_icv = spu_req_incl_icv(ctx->cipher.mode, rctx->is_encrypt);
++	datalen = chunksize;
++	if (incl_icv) {
++		/*
++		 * Input is ciphertxt plus ICV, but ICV not incl
++		 * in output.
++		 */
++		datalen -= digestsize;
++	}
++
+ 	/*
+ 	 * Count number of sg entries from the crypto API request that are to
+ 	 * be included in this mailbox message. For dst sg, don't count space
+ 	 * for digest. Digest gets caught in a separate buffer and copied back
+ 	 * to dst sg when processing response.
+ 	 */
+-	rctx->src_nents = spu_sg_count(rctx->src_sg, rctx->src_skip, chunksize);
+-	rctx->dst_nents = spu_sg_count(rctx->dst_sg, rctx->dst_skip, chunksize);
++	rctx->src_nents = spu_sg_count(rctx->src_sg, rctx->src_skip, datalen);
++	rctx->dst_nents = spu_sg_count(rctx->dst_sg, rctx->dst_skip, datalen);
+ 	if (aead_parms.assoc_size)
+ 		assoc_nents = spu_sg_count(rctx->assoc, 0,
+ 					   aead_parms.assoc_size);
+@@ -1463,8 +1469,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 		req_opts.is_rfc4543 = true;
+ 	}
+ 
+-	if (spu_req_incl_icv(ctx->cipher.mode, rctx->is_encrypt)) {
+-		incl_icv = true;
++	if (incl_icv) {
+ 		tx_frag_num++;
+ 		/* Copy ICV from end of src scatterlist to digest buf */
+ 		sg_copy_part_to_buf(req->src, rctx->msg_buf.digest, digestsize,
+@@ -1520,7 +1525,6 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 
+ 	/* Create rx scatterlist to catch result */
+ 	rx_frag_num += rctx->dst_nents;
+-	resp_len = chunksize;
+ 
+ 	/*
+ 	 * Always catch ICV in separate buffer. Have to for GCM/CCM because of
+@@ -1529,21 +1533,9 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	 */
+ 	rx_frag_num++;
+ 
+-	if (((ctx->cipher.mode == CIPHER_MODE_GCM) ||
+-	     (ctx->cipher.mode == CIPHER_MODE_CCM)) && !rctx->is_encrypt) {
+-		/*
+-		 * Input is ciphertxt plus ICV, but ICV not incl
+-		 * in output.
+-		 */
+-		resp_len -= ctx->digestsize;
+-		if (resp_len == 0)
+-			/* no rx frags to catch output data */
+-			rx_frag_num -= rctx->dst_nents;
+-	}
+-
+ 	err = spu_aead_rx_sg_create(mssg, req, rctx, rx_frag_num,
+ 				    aead_parms.assoc_size,
+-				    aead_parms.ret_iv_len, resp_len, digestsize,
++				    aead_parms.ret_iv_len, datalen, digestsize,
+ 				    stat_pad_len);
+ 	if (err)
+ 		return err;
+@@ -1559,7 +1551,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 		tx_frag_num++;
+ 	err = spu_aead_tx_sg_create(mssg, rctx, tx_frag_num, spu_hdr_len,
+ 				    rctx->assoc, aead_parms.assoc_size,
+-				    assoc_nents, aead_parms.iv_len, chunksize,
++				    assoc_nents, aead_parms.iv_len, datalen,
+ 				    aead_parms.aad_pad_len, pad_len, incl_icv);
+ 	if (err)
+ 		return err;

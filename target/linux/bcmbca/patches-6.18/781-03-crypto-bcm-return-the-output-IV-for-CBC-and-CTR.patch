@@ -1,0 +1,62 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - return the output IV for CBC and CTR
+
+The crypto API expects an skcipher to leave in req->iv the IV that
+continues the operation in a following request. The driver never writes
+req->iv, so every CBC and CTR self-test fails with "wrong output IV",
+and users that chain requests get wrong results.
+
+Set the output IV when the last chunk of a request completes:
+- CBC encryption: the last ciphertext block, read back from req->dst.
+- CBC decryption: the last ciphertext block. handle_skcipher_req()
+  already saves it in msg_buf.iv_ctr before the request is sent, because
+  an in-place request overwrites it.
+- CTR: the counter in msg_buf.iv_ctr, which handle_skcipher_req()
+  advances by the whole blocks sent, plus one for a partial last block.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -463,6 +463,29 @@ static int handle_skcipher_req(struct iproc_reqctx_s *rctx)
+ 	return -EINPROGRESS;
+ }
+ 
++static void skcipher_set_output_iv(struct iproc_reqctx_s *rctx,
++				   struct skcipher_request *req)
++{
++	unsigned int ivsize = rctx->iv_ctr_len;
++
++	switch (rctx->ctx->cipher.mode) {
++	case CIPHER_MODE_CBC:
++		if (rctx->is_encrypt)
++			sg_copy_part_to_buf(req->dst, req->iv, ivsize,
++					    rctx->total_todo - ivsize);
++		else
++			memcpy(req->iv, rctx->msg_buf.iv_ctr, ivsize);
++		break;
++	case CIPHER_MODE_CTR:
++		if (rctx->total_todo % AES_BLOCK_SIZE)
++			add_to_ctr(rctx->msg_buf.iv_ctr, 1);
++		memcpy(req->iv, rctx->msg_buf.iv_ctr, ivsize);
++		break;
++	default:
++		break;
++	}
++}
++
+ /**
+  * handle_skcipher_resp() - Process a block cipher SPU response. Updates the
+  * total received count for the request and updates global stats.
+@@ -497,6 +520,7 @@ static void handle_skcipher_resp(struct iproc_reqctx_s *rctx)
+ 
+ 	rctx->total_received += payload_len;
+ 	if (rctx->total_received == rctx->total_todo) {
++		skcipher_set_output_iv(rctx, req);
+ 		atomic_inc(&iproc_priv.op_counts[SPU_OP_CIPHER]);
+ 		atomic_inc(
+ 		   &iproc_priv.cipher_cnt[ctx->cipher.alg][ctx->cipher.mode]);

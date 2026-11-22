@@ -1,0 +1,30 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - clear the final flag when importing a hash state
+
+ahash_import() restores the fields saved by ahash_export() but leaves
+is_final as it was in the request. The import may go to a request whose
+context holds anything, for example one that has just finished a
+final(), so the next update() can run as a final: it pads the message
+and writes the digest to req->result. The self-tests poison the request
+context before the import and fail every hash with "update() used result
+buffer" in the import/export configuration.
+
+A state is only exported between init() and final(), so clear is_final
+on import.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2343,6 +2343,7 @@ static int ahash_import(struct ahash_request *req, const void *in)
+ 	struct iproc_reqctx_s *rctx = ahash_request_ctx(req);
+ 	struct spu_hash_export_s *spu_exp = (struct spu_hash_export_s *)in;
+ 
++	rctx->is_final = 0;
+ 	rctx->total_todo = spu_exp->total_todo;
+ 	rctx->total_sent = spu_exp->total_sent;
+ 	rctx->is_sw_hmac = spu_exp->is_sw_hmac;

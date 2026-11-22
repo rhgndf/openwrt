@@ -1,0 +1,53 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - reject skcipher lengths the hardware cannot process
+
+The SPU-M does not report a request length it cannot process. ECB and
+CBC requests with a partial last block complete with a good status, so
+the self-tests report "unexpectedly succeeded", and requests the
+software implementations reject reach the hardware.
+
+Check the length first, as the software implementations do:
+- ECB and CBC need whole blocks.
+- XTS needs at least one block.
+Complete an empty request at once instead of sending an empty message.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1712,13 +1712,29 @@ cb_finish:
+  */
+ static int skcipher_enqueue(struct skcipher_request *req, bool encrypt)
+ {
++	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+ 	struct iproc_reqctx_s *rctx = skcipher_request_ctx(req);
+-	struct iproc_ctx_s *ctx =
+-	    crypto_skcipher_ctx(crypto_skcipher_reqtfm(req));
++	struct iproc_ctx_s *ctx = crypto_skcipher_ctx(tfm);
+ 	int err;
+ 
+ 	flow_log("%s() enc:%u\n", __func__, encrypt);
+ 
++	switch (ctx->cipher.mode) {
++	case CIPHER_MODE_ECB:
++	case CIPHER_MODE_CBC:
++		if (!IS_ALIGNED(req->cryptlen, crypto_skcipher_blocksize(tfm)))
++			return -EINVAL;
++		break;
++	case CIPHER_MODE_XTS:
++		if (req->cryptlen < AES_BLOCK_SIZE)
++			return -EINVAL;
++		break;
++	default:
++		break;
++	}
++	if (!req->cryptlen)
++		return 0;
++
+ 	rctx->gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+ 		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
+ 	rctx->parent = &req->base;

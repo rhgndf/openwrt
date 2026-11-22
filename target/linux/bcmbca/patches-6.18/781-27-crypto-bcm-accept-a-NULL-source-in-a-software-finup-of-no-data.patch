@@ -1,0 +1,37 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - accept a NULL source in a software finup of no data
+
+Since commit 9d7a0ab1c753 ("crypto: ahash - Handle partial blocks in
+API"), crypto_ahash_final() is a crypto_ahash_finup() of 0 bytes, and
+AF_ALG calls it with a NULL source to hash an empty message. On SPU-M,
+ahash_finup() takes the software path for AES-XCBC and returns -EINVAL
+for a NULL source before it looks at the length. On BCM6755, reading
+the digest of an empty message from an AF_ALG xcbc-aes-iproc socket
+fails with EINVAL; md5-iproc and sha256-iproc return the right digest.
+
+Drop the check. With no data, sg_nents() and sg_copy_to_buffer() handle
+a NULL list, and a NULL source with data still fails because
+sg_copy_to_buffer() copies nothing.
+
+Fixes: 9d7a0ab1c753 ("crypto: ahash - Handle partial blocks in API")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 7 +------
+ 1 file changed, 1 insertion(+), 6 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2300,12 +2300,7 @@ static int ahash_finup(struct ahash_request *req)
+ 		 * supported by the hardware, we need to handle it in software
+ 		 * by calling synchronous hash functions.
+ 		 */
+-		if (req->src) {
+-			nents = sg_nents(req->src);
+-		} else {
+-			ret = -EINVAL;
+-			goto ahash_finup_exit;
+-		}
++		nents = sg_nents(req->src);
+ 
+ 		/* Copy data from req scatterlist to tmp buffer */
+ 		gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?

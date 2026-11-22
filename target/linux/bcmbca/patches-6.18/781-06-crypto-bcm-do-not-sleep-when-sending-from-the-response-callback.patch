@@ -1,0 +1,154 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - do not sleep when sending from the response callback
+
+A request too long for one SPU message is sent in chunks, and each
+chunk after the first is sent from spu_rx_callback(). The PDC mailbox
+calls that from its BH work, which runs in softirq context. The next
+chunk still uses the allocation flags and request flags of the caller:
+- rctx->gfp is GFP_KERNEL for a request that may sleep, so the
+  scatterlists are allocated with GFP_KERNEL in softirq context.
+- mailbox_send_message() sleeps in usleep_range() while the mailbox
+  queue is full if the request has CRYPTO_TFM_REQ_MAY_SLEEP.
+
+rctx->gfp is also GFP_KERNEL for a request that only has
+CRYPTO_TFM_REQ_MAY_BACKLOG. That flag does not allow sleeping.
+
+Choose GFP_KERNEL only for CRYPTO_TFM_REQ_MAY_SLEEP. Switch rctx->gfp
+to GFP_ATOMIC before the callback sends the next chunk. Let
+mailbox_send_message() wait only if that gfp mask allows blocking.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 41 ++++++++++++++++++++-----------------
+ 1 file changed, 22 insertions(+), 19 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -241,7 +241,7 @@ spu_skcipher_tx_sg_create(struct brcm_message *mssg,
+ 	return 0;
+ }
+ 
+-static int mailbox_send_message(struct brcm_message *mssg, u32 flags,
++static int mailbox_send_message(struct brcm_message *mssg, gfp_t gfp,
+ 				u8 chan_idx)
+ {
+ 	int err;
+@@ -249,11 +249,12 @@ static int mailbox_send_message(struct brcm_message *mssg, u32 flags,
+ 	struct device *dev = &(iproc_priv.pdev->dev);
+ 
+ 	err = mbox_send_message(iproc_priv.mbox[chan_idx], mssg);
+-	if (flags & CRYPTO_TFM_REQ_MAY_SLEEP) {
++	if (gfpflags_allow_blocking(gfp)) {
+ 		while ((err == -ENOBUFS) && (retry_cnt < SPU_MB_RETRY_MAX)) {
+ 			/*
+-			 * Mailbox queue is full. Since MAY_SLEEP is set, assume
+-			 * not in atomic context and we can wait and try again.
++			 * Mailbox queue is full. The request may sleep and we
++			 * are not in the response callback, so wait and try
++			 * again.
+ 			 */
+ 			retry_cnt++;
+ 			usleep_range(MBOX_SLEEP_MIN, MBOX_SLEEP_MAX);
+@@ -456,7 +457,7 @@ static int handle_skcipher_req(struct iproc_reqctx_s *rctx)
+ 	if (err)
+ 		return err;
+ 
+-	err = mailbox_send_message(mssg, req->base.flags, rctx->chan_idx);
++	err = mailbox_send_message(mssg, rctx->gfp, rctx->chan_idx);
+ 	if (unlikely(err < 0))
+ 		return err;
+ 
+@@ -901,7 +902,7 @@ static int handle_ahash_req(struct iproc_reqctx_s *rctx)
+ 	if (err)
+ 		return err;
+ 
+-	err = mailbox_send_message(mssg, req->base.flags, rctx->chan_idx);
++	err = mailbox_send_message(mssg, rctx->gfp, rctx->chan_idx);
+ 	if (unlikely(err < 0))
+ 		return err;
+ 
+@@ -1539,7 +1540,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	if (err)
+ 		return err;
+ 
+-	err = mailbox_send_message(mssg, req->base.flags, rctx->chan_idx);
++	err = mailbox_send_message(mssg, rctx->gfp, rctx->chan_idx);
+ 	if (unlikely(err < 0))
+ 		return err;
+ 
+@@ -1694,6 +1695,8 @@ static void spu_rx_callback(struct mbox_client *cl, void *msg)
+ 		/* Deallocate anything specific to previous chunk */
+ 		spu_chunk_cleanup(rctx);
+ 
++		rctx->gfp = GFP_ATOMIC;
++
+ 		switch (rctx->ctx->alg->type) {
+ 		case CRYPTO_ALG_TYPE_SKCIPHER:
+ 			err = handle_skcipher_req(rctx);
+@@ -1759,8 +1762,8 @@ static int skcipher_enqueue(struct skcipher_request *req, bool encrypt)
+ 	if (!req->cryptlen)
+ 		return 0;
+ 
+-	rctx->gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+-		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
++	rctx->gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
++		       GFP_KERNEL : GFP_ATOMIC;
+ 	rctx->parent = &req->base;
+ 	rctx->is_encrypt = encrypt;
+ 	rctx->bd_suppress = false;
+@@ -1950,8 +1953,8 @@ static int ahash_enqueue(struct ahash_request *req)
+ 
+ 	flow_log("ahash_enqueue() nbytes:%u\n", req->nbytes);
+ 
+-	rctx->gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+-		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
++	rctx->gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
++		       GFP_KERNEL : GFP_ATOMIC;
+ 	rctx->parent = &req->base;
+ 	rctx->ctx = ctx;
+ 	rctx->bd_suppress = true;
+@@ -2076,8 +2079,8 @@ static int ahash_init(struct ahash_request *req)
+ 			goto err;
+ 		}
+ 
+-		gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+-		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
++		gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
++		       GFP_KERNEL : GFP_ATOMIC;
+ 		ctx->shash = kmalloc(sizeof(*ctx->shash) +
+ 				     crypto_shash_descsize(hash), gfp);
+ 		if (!ctx->shash) {
+@@ -2148,8 +2151,8 @@ static int ahash_update(struct ahash_request *req)
+ 			return -EINVAL;
+ 
+ 		/* Copy data from req scatterlist to tmp buffer */
+-		gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+-		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
++		gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
++		       GFP_KERNEL : GFP_ATOMIC;
+ 		tmpbuf = kmalloc(req->nbytes, gfp);
+ 		if (!tmpbuf)
+ 			return -ENOMEM;
+@@ -2244,8 +2247,8 @@ static int ahash_finup(struct ahash_request *req)
+ 		}
+ 
+ 		/* Copy data from req scatterlist to tmp buffer */
+-		gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+-		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
++		gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
++		       GFP_KERNEL : GFP_ATOMIC;
+ 		tmpbuf = kmalloc(req->nbytes, gfp);
+ 		if (!tmpbuf) {
+ 			ret = -ENOMEM;
+@@ -2656,8 +2659,8 @@ static int aead_enqueue(struct aead_request *req, bool is_encrypt)
+ 		return -EINVAL;
+ 	}
+ 
+-	rctx->gfp = (req->base.flags & (CRYPTO_TFM_REQ_MAY_BACKLOG |
+-		       CRYPTO_TFM_REQ_MAY_SLEEP)) ? GFP_KERNEL : GFP_ATOMIC;
++	rctx->gfp = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
++		       GFP_KERNEL : GFP_ATOMIC;
+ 	rctx->parent = &req->base;
+ 	rctx->is_encrypt = is_encrypt;
+ 	rctx->bd_suppress = false;

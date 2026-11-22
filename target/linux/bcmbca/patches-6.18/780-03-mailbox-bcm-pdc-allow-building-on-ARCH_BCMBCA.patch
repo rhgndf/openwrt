@@ -1,0 +1,33 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] mailbox: bcm-pdc: allow building on ARCH_BCMBCA
+
+The SPU crypto engine of the Broadcom BCA (broadband) SoCs BCM4908,
+BCM63158, BCM6858, BCM47622 and BCM6756 sits behind the same PDC
+(FlexSparx dma64) ring manager as the one on Northstar 2, with the same
+register layout and descriptor format. The Broadcom SDK drives it with a
+fork of this driver (bcmdrivers/opensource/char/pdc/impl1/pdc.c).
+
+Allow BCM_PDC_MBOX to be selected on ARCH_BCMBCA.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/mailbox/Kconfig | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+--- a/drivers/mailbox/Kconfig
++++ b/drivers/mailbox/Kconfig
+@@ -250,11 +250,12 @@ config XGENE_SLIMPRO_MBOX
+ 
+ config BCM_PDC_MBOX
+ 	tristate "Broadcom FlexSparx DMA Mailbox"
+-	depends on ARCH_BCM_IPROC || COMPILE_TEST
++	depends on ARCH_BCM_IPROC || ARCH_BCMBCA || COMPILE_TEST
+ 	help
+ 	  Mailbox implementation for the Broadcom FlexSparx DMA ring manager,
+ 	  which provides access to various offload engines on Broadcom
+-	  SoCs, including FA2/FA+ on Northstar Plus and PDC on Northstar 2.
++	  SoCs, including FA2/FA+ on Northstar Plus, PDC on Northstar 2 and
++	  the SPU PDC on BCA SoCs such as BCM4908 and BCM47622.
+ 
+ config BCM_FLEXRM_MBOX
+ 	tristate "Broadcom FlexRM Mailbox"

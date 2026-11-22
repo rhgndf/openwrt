@@ -1,0 +1,36 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - fix the AEAD fallback calling itself
+
+aead_do_fallback() sets up the subrequest for the software fallback
+but then passes the original request to crypto_aead_encrypt() and
+crypto_aead_decrypt(). That calls back into aead_encrypt() or
+aead_decrypt() of this driver, which picks the fallback again, so the
+call recurses until the stack overflows.
+
+Any request that needs the fallback takes this path, for example AES-GCM
+or AES-CCM with no AAD and no plaintext. That is the first gcm(aes)
+self-test vector, so loading the driver with the self-tests enabled
+crashes the kernel.
+
+Pass the subrequest instead.
+
+Fixes: 654627ad0bee ("crypto: bcm - Use subrequest for fallback")
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2595,8 +2595,8 @@ static int aead_do_fallback(struct aead_request *req, bool is_encrypt)
+ 			       req->iv);
+ 	aead_request_set_ad(subreq, req->assoclen);
+ 
+-	return is_encrypt ? crypto_aead_encrypt(req) :
+-			    crypto_aead_decrypt(req);
++	return is_encrypt ? crypto_aead_encrypt(subreq) :
++			    crypto_aead_decrypt(subreq);
+ }
+ 
+ static int aead_enqueue(struct aead_request *req, bool is_encrypt)

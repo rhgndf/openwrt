@@ -1,0 +1,65 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] mailbox: bcm-pdc: check ring space before mapping a message
+
+pdc_send_data() maps both scatterlists of a message and only then checks
+whether the rings have room for its descriptors. If not, it returns
+-ENOSPC without unmapping them. The mailbox framework keeps the message
+queued and calls pdc_send_data() again later, which maps the same
+scatterlists again. The first mappings are never released, and with
+CONFIG_DMA_API_DEBUG the second mapping is reported as an overlapping
+mapping.
+
+Check the ring space first. The descriptor count uses only the
+scatterlist lengths, so it does not need the mapping.
+
+Fixes: ab8d1b2d564f ("mailbox: bcm-pdc: Convert from interrupts to poll for tx done")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/mailbox/bcm-pdc-mailbox.c | 29 +++++++++++++++--------------
+ 1 file changed, 15 insertions(+), 14 deletions(-)
+
+--- a/drivers/mailbox/bcm-pdc-mailbox.c
++++ b/drivers/mailbox/bcm-pdc-mailbox.c
+@@ -1203,6 +1203,21 @@ static int pdc_send_data(struct mbox_chan *chan, void *data)
+ 	if (unlikely(mssg->type != BRCM_MESSAGE_SPU))
+ 		return -ENOTSUPP;
+ 
++	/*
++	 * Check if the tx and rx rings have enough space. Do this prior to
++	 * mapping the message or writing any tx or rx descriptors: the
++	 * message stays queued in the mailbox framework and is sent again
++	 * later. Need to ensure that we do not write a partial set of
++	 * descriptors, or write just rx descriptors but corresponding tx
++	 * descriptors don't fit. Note that we want this check and the entire
++	 * sequence of descriptor to happen without another thread getting in.
++	 * The channel spin lock in the mailbox framework ensures this.
++	 */
++	tx_desc_req = pdc_desc_count(mssg->spu.src);
++	rx_desc_req = pdc_desc_count(mssg->spu.dst);
++	if (unlikely(pdc_rings_full(pdcs, tx_desc_req, rx_desc_req + 1)))
++		return -ENOSPC;
++
+ 	src_nent = sg_nents(mssg->spu.src);
+ 	if (likely(src_nent)) {
+ 		nent = dma_map_sg(dev, mssg->spu.src, src_nent, DMA_TO_DEVICE);
+@@ -1221,20 +1236,6 @@ static int pdc_send_data(struct mbox_chan *chan, void *data)
+ 		}
+ 	}
+ 
+-	/*
+-	 * Check if the tx and rx rings have enough space. Do this prior to
+-	 * writing any tx or rx descriptors. Need to ensure that we do not write
+-	 * a partial set of descriptors, or write just rx descriptors but
+-	 * corresponding tx descriptors don't fit. Note that we want this check
+-	 * and the entire sequence of descriptor to happen without another
+-	 * thread getting in. The channel spin lock in the mailbox framework
+-	 * ensures this.
+-	 */
+-	tx_desc_req = pdc_desc_count(mssg->spu.src);
+-	rx_desc_req = pdc_desc_count(mssg->spu.dst);
+-	if (unlikely(pdc_rings_full(pdcs, tx_desc_req, rx_desc_req + 1)))
+-		return -ENOSPC;
+-
+ 	/* Create rx descriptors to SPU catch response */
+ 	err = pdc_rx_list_init(pdcs, mssg->spu.dst, mssg->ctx);
+ 	err |= pdc_rx_list_sg_add(pdcs, mssg->spu.dst);

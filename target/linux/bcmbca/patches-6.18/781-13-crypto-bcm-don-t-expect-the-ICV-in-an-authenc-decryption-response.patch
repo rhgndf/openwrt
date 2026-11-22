@@ -1,0 +1,73 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - don't expect the ICV in an authenc decryption response
+
+An authenc decryption sends the ICV at the end of the data. The SPU
+checks it and returns the plaintext, the computed digest and the
+status, without the ICV. handle_aead_req() expects the ICV in the
+response data, so the receive table is one digest too long:
+
+- Out of place, dst has no room for an ICV, and the request fails:
+
+    alg: aead: authenc-hmac-sha1-cbc-aes-iproc decryption failed on
+    test vector 0; expected_error=0, actual_error=-14, cfg="out-of-place"
+
+- In place, the status lands in the digest buffer, and the status
+  buffer reads as success. A message with a bad ICV then decrypts
+  without an error.
+
+Leave the ICV out of the response length of every decryption, as GCM
+and CCM already do. Broadcom's own driver for this SPU, in the
+BCM47622 SDK, does the same.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1311,6 +1311,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	int err;
+ 	unsigned int chunksize;
+ 	unsigned int datalen;
++	unsigned int resp_len;
+ 	u32 spu_hdr_len;
+ 	u32 db_size;
+ 	u32 stat_pad_len;
+@@ -1382,12 +1383,15 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 
+ 	incl_icv = spu_req_incl_icv(ctx->cipher.mode, rctx->is_encrypt);
+ 	datalen = chunksize;
+-	if (incl_icv) {
++	if (incl_icv)
++		datalen -= digestsize;
++	resp_len = chunksize;
++	if (!rctx->is_encrypt) {
+ 		/*
+ 		 * Input is ciphertxt plus ICV, but ICV not incl
+ 		 * in output.
+ 		 */
+-		datalen -= digestsize;
++		resp_len -= digestsize;
+ 	}
+ 
+ 	/*
+@@ -1397,7 +1401,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	 * to dst sg when processing response.
+ 	 */
+ 	rctx->src_nents = spu_sg_count(rctx->src_sg, rctx->src_skip, datalen);
+-	rctx->dst_nents = spu_sg_count(rctx->dst_sg, rctx->dst_skip, datalen);
++	rctx->dst_nents = spu_sg_count(rctx->dst_sg, rctx->dst_skip, resp_len);
+ 	if (aead_parms.assoc_size)
+ 		assoc_nents = spu_sg_count(rctx->assoc, 0,
+ 					   aead_parms.assoc_size);
+@@ -1535,7 +1539,7 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 
+ 	err = spu_aead_rx_sg_create(mssg, req, rctx, rx_frag_num,
+ 				    aead_parms.assoc_size,
+-				    aead_parms.ret_iv_len, datalen, digestsize,
++				    aead_parms.ret_iv_len, resp_len, digestsize,
+ 				    stat_pad_len);
+ 	if (err)
+ 		return err;

@@ -1,0 +1,39 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - count GCM and CCM padding against the SPU-M payload limit
+
+aead_need_fallback() sends a request to SPU-M when the associated data
+plus the crypt length fit in max_payload, 65520 bytes for GCM and CCM.
+handle_aead_req() then pads the associated data (plus 2 for CCM) and
+the data to 16 bytes each, so the buffer descriptor can grow by up to
+30 bytes past max_payload and past the 16-bit BD Payload Length field.
+On BCM6755 the SPU never answers such a request and every later one
+queues behind it. Encrypting 65519 bytes with 1 byte of associated
+data through gcm-aes-iproc (65536 bytes after padding), or 65505 bytes
+with 15 bytes through ccm-aes-iproc (65550 bytes), wedges the engine;
+16 + 65504 bytes (GCM) and 14 + 65504 bytes (CCM) still work.
+
+Add the worst-case padding to the length checked against max_payload,
+so these requests go to the fallback instead.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2672,8 +2672,12 @@ static int aead_need_fallback(struct aead_request *req)
+ 	}
+ 
+ 	payload_len = req->cryptlen;
+-	if (spu->spu_type == SPU_TYPE_SPUM)
++	if (spu->spu_type == SPU_TYPE_SPUM) {
+ 		payload_len += req->assoclen;
++		if ((ctx->cipher.mode == CIPHER_MODE_GCM) ||
++		    (ctx->cipher.mode == CIPHER_MODE_CCM))
++			payload_len += 2 * (SPU_GCM_CCM_ALIGN - 1);
++	}
+ 
+ 	flow_log("%s() payload len: %u\n", __func__, payload_len);
+ 

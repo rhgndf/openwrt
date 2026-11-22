@@ -1,0 +1,89 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - end the mailbox scatterlists at the last entry used
+
+Each request builds its mailbox message in scatterlist tables sized by
+an upper bound on the entries it needs, and sg_init_table() puts the
+end marker on the last one. The PDC mailbox maps and posts every entry
+up to the end marker. An entry left unused is mapped with a NULL page,
+and on ARM the cache maintenance of that address faults:
+
+  Unable to handle kernel paging request at virtual address 97400000
+  PC is at v7_dma_clean_range+0x1c/0x34
+  ...
+   dma_map_sg_attrs from pdc_send_data+0x120/0x708 [bcm_pdc_mailbox]
+   ...
+   mailbox_send_message [bcm_crypto_spu] from handle_aead_req+0x800/0xb3c
+
+The bound is above the entries used in several cases:
+- spu_sg_count() counts entries without data, and spu_msg_sg_add()
+  skips them.
+- GCM and CCM decryption count the src and dst entries of the whole
+  chunk, but send and receive the ICV in a separate buffer.
+
+Mark the end of each table at the last entry filled in.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -171,6 +171,7 @@ spu_skcipher_rx_sg_create(struct brcm_message *mssg,
+ 
+ 	memset(rctx->msg_buf.rx_stat, 0, SPU_RX_STATUS_LEN);
+ 	sg_set_buf(sg, rctx->msg_buf.rx_stat, spu->spu_rx_status_len());
++	sg_mark_end(sg);
+ 
+ 	return 0;
+ }
+@@ -236,8 +237,9 @@ spu_skcipher_tx_sg_create(struct brcm_message *mssg,
+ 	stat_len = spu->spu_tx_status_len();
+ 	if (stat_len) {
+ 		memset(rctx->msg_buf.tx_stat, 0, stat_len);
+-		sg_set_buf(sg, rctx->msg_buf.tx_stat, stat_len);
++		sg_set_buf(sg++, rctx->msg_buf.tx_stat, stat_len);
+ 	}
++	sg_mark_end(sg - 1);
+ 	return 0;
+ }
+ 
+@@ -575,6 +577,7 @@ spu_ahash_rx_sg_create(struct brcm_message *mssg,
+ 
+ 	memset(rctx->msg_buf.rx_stat, 0, SPU_RX_STATUS_LEN);
+ 	sg_set_buf(sg, rctx->msg_buf.rx_stat, spu->spu_rx_status_len());
++	sg_mark_end(sg);
+ 	return 0;
+ }
+ 
+@@ -643,8 +646,9 @@ spu_ahash_tx_sg_create(struct brcm_message *mssg,
+ 	stat_len = spu->spu_tx_status_len();
+ 	if (stat_len) {
+ 		memset(rctx->msg_buf.tx_stat, 0, stat_len);
+-		sg_set_buf(sg, rctx->msg_buf.tx_stat, stat_len);
++		sg_set_buf(sg++, rctx->msg_buf.tx_stat, stat_len);
+ 	}
++	sg_mark_end(sg - 1);
+ 
+ 	return 0;
+ }
+@@ -1171,6 +1175,7 @@ static int spu_aead_rx_sg_create(struct brcm_message *mssg,
+ 
+ 	memset(rctx->msg_buf.rx_stat, 0, SPU_RX_STATUS_LEN);
+ 	sg_set_buf(sg, rctx->msg_buf.rx_stat, spu->spu_rx_status_len());
++	sg_mark_end(sg);
+ 
+ 	return 0;
+ }
+@@ -1277,8 +1282,9 @@ static int spu_aead_tx_sg_create(struct brcm_message *mssg,
+ 	stat_len = spu->spu_tx_status_len();
+ 	if (stat_len) {
+ 		memset(rctx->msg_buf.tx_stat, 0, stat_len);
+-		sg_set_buf(sg, rctx->msg_buf.tx_stat, stat_len);
++		sg_set_buf(sg++, rctx->msg_buf.tx_stat, stat_len);
+ 	}
++	sg_mark_end(sg - 1);
+ 	return 0;
+ }
+ 

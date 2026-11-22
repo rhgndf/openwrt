@@ -1,0 +1,45 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - use an 8-byte IV for rfc4309
+
+RFC 4309 carries an 8-byte IV, and the generic rfc4309 template has an
+ivsize of 8. The driver registers rfc4309(ccm(aes)) with the 16-byte
+ivsize of ccm(aes), so the self-test rejects it:
+
+  alg: aead: ivsize for ccm-aes-esp-iproc (16) doesn't match generic
+  impl (8)
+
+aead_enqueue() also copies 12 bytes of req->iv after the 3-byte salt,
+which reads past an 8-byte IV. spum_ccm_update_iv() then overwrites
+the last 4 of them with the length field.
+
+Register an ivsize of CCM_ESP_IV_SIZE, and copy the ivsize of the
+transform from req->iv. That is what was copied before for every
+other AEAD.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -2781,8 +2781,7 @@ static int aead_enqueue(struct aead_request *req, bool is_encrypt)
+ 			memcpy(rctx->msg_buf.iv_ctr + ctx->salt_offset,
+ 			       ctx->salt, ctx->salt_len);
+ 		memcpy(rctx->msg_buf.iv_ctr + ctx->salt_offset + ctx->salt_len,
+-		       req->iv,
+-		       rctx->iv_ctr_len - ctx->salt_len - ctx->salt_offset);
++		       req->iv, crypto_aead_ivsize(aead));
+ 	}
+ 
+ 	rctx->chan_idx = select_channel();
+@@ -3179,7 +3178,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 			.cra_flags = CRYPTO_ALG_NEED_FALLBACK
+ 		 },
+ 		 .setkey = aead_ccm_esp_setkey,
+-		 .ivsize = CCM_AES_IV_SIZE,
++		 .ivsize = CCM_ESP_IV_SIZE,
+ 		 .maxauthsize = AES_BLOCK_SIZE,
+ 	 },
+ 	 .cipher_info = {

@@ -1,0 +1,40 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - keep a padded SPU-M hash chunk within the payload limit
+
+handle_ahash_req() cuts a hash request into chunks of at most
+max_payload bytes, and on SPU-M appends the MD5/SHA padding to the last
+chunk in software. max_payload is already the largest value the 16-bit
+BD Payload Length field holds, rounded down to the block size, so the
+padding can push the last chunk past it. A last chunk of 65464 to
+65472 bytes (64-byte blocks) or 65392 to 65408 bytes (SHA-384/512)
+becomes 65536 bytes, which the BD size and MAC length fields truncate
+to 0. On BCM6755 the SPU never answers such a request and every later
+one queues behind it, so a single AF_ALG digest of 65471 bytes through
+md5-iproc wedges the engine; 65408 and 65463 bytes still work.
+
+When the padded last chunk would not fit, send all but its last
+partial or full block as an ordinary chunk and hash the rest, padded,
+in the next one.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -758,6 +758,13 @@ static int handle_ahash_req(struct iproc_reqctx_s *rctx)
+ 	    (chunksize > ctx->max_payload))
+ 		chunksize = ctx->max_payload;
+ 
++	if (rctx->is_final && (chunksize == nbytes_to_hash) &&
++	    (ctx->max_payload != SPU_MAX_PAYLOAD_INF) &&
++	    (chunksize + spu->spu_hash_pad_len(hash_parms.alg, hash_parms.mode,
++					       chunksize, blocksize) >
++	     ctx->max_payload))
++		chunksize = rounddown(chunksize - 1, blocksize);
++
+ 	/*
+ 	 * If this is not a final request and the request data is not a multiple
+ 	 * of a full block, then simply park the extra data and prefix it to the

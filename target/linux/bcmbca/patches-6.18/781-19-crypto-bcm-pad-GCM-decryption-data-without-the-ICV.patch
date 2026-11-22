@@ -1,0 +1,59 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - pad GCM decryption data without the ICV
+
+A GCM or CCM decryption chunk ends with the ICV, which SPU-M receives
+after the padded data. The driver pads CCM data without the ICV, but
+GCM data with it, and sizes the padding in the response without it.
+With a 16-byte ICV the two agree. With an 8 or 12-byte ICV the SPU
+returns a response of a different length than the buffers given to
+the PDC, so the driver reads the status from the wrong place:
+
+  alg: aead: gcm-aes-esp-iproc decryption unexpectedly succeeded on
+  test vector "random: alen=16 plen=1040 authsize=8 klen=36
+  novrfy=1"; expected_error=-EBADMSG or -22, ...
+
+When the response is shorter, its last receive descriptor is never
+written, and the request completes only when the response to another
+request arrives. The self-test then waits for it forever.
+
+Pad the data of all GCM and CCM decryptions without the ICV.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 16 +++++-----------
+ 1 file changed, 5 insertions(+), 11 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1426,9 +1426,12 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 	aead_parms.aad_pad_len = spu->spu_gcm_ccm_pad_len(ctx->cipher.mode,
+ 						 aead_parms.assoc_size);
+ 
+-	/* General case data padding (CCM decrypt special case below) */
++	/*
++	 * General case data padding (RFC4543 special case below), without
++	 * the size of the ICV tacked on to the end of a decryption chunk
++	 */
+ 	aead_parms.data_pad_len = spu->spu_gcm_ccm_pad_len(ctx->cipher.mode,
+-							   chunksize);
++							   datalen);
+ 
+ 	if (ctx->cipher.mode == CIPHER_MODE_CCM) {
+ 		/*
+@@ -1439,15 +1442,6 @@ static int handle_aead_req(struct iproc_reqctx_s *rctx)
+ 					 ctx->cipher.mode,
+ 					 aead_parms.assoc_size + 2);
+ 
+-		/*
+-		 * And when decrypting CCM, need to pad without including
+-		 * size of ICV which is tacked on to end of chunk
+-		 */
+-		if (!rctx->is_encrypt)
+-			aead_parms.data_pad_len =
+-				spu->spu_gcm_ccm_pad_len(ctx->cipher.mode,
+-							chunksize - digestsize);
+-
+ 		/* CCM also requires software to rewrite portions of IV: */
+ 		spu->spu_ccm_update_iv(digestsize, &cipher_parms, req->assoclen,
+ 				       chunksize, rctx->is_encrypt,

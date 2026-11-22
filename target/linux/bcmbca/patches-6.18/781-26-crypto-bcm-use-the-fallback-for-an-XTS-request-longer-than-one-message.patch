@@ -1,0 +1,34 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - use the fallback for an XTS request longer than one message
+
+handle_skcipher_req() splits a request larger than max_payload into
+several SPU messages, and before each one advances the IV for CBC and
+CTR. It does nothing for XTS, and SPU-M takes the tweak as the IV, so
+every message after the first starts the tweak sequence over from the
+original IV. On BCM6755, max_payload for XTS is 65504 bytes. AF_ALG
+encryptions through xts-aes-iproc of 65520 to 300000 bytes are wrong
+from offset 65504 to the end, and decryptions of those lengths fail
+too; 4096 bytes is correct.
+
+Send an XTS request that does not fit in one message to the software
+fallback, as is done for one with a partial last block.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1800,7 +1800,9 @@ static int skcipher_enqueue(struct skcipher_request *req, bool encrypt)
+ 	case CIPHER_MODE_XTS:
+ 		if (req->cryptlen < AES_BLOCK_SIZE)
+ 			return -EINVAL;
+-		if (!IS_ALIGNED(req->cryptlen, AES_BLOCK_SIZE))
++		if (!IS_ALIGNED(req->cryptlen, AES_BLOCK_SIZE) ||
++		    ((ctx->max_payload != SPU_MAX_PAYLOAD_INF) &&
++		     (req->cryptlen > ctx->max_payload)))
+ 			return skcipher_do_fallback(req, encrypt);
+ 		break;
+ 	default:

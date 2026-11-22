@@ -1,0 +1,53 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - fail a CCM decryption whose ICV does not match
+
+On BCM6755, SPU-M does not flag a CCM ICV mismatch with the error flag
+and SPU_STATUS_INVALID_ICV, as it does for GCM (status 0xc0020100).
+It sets bit 24 of the status word instead and nothing else, so the
+driver accepts the bad tag:
+
+  alg: aead: ccm-aes-iproc decryption unexpectedly succeeded on test
+  vector 16; expected_error=-EBADMSG, cfg="in-place (one sglist)"
+  alg: aead: ccm-aes-esp-iproc decryption unexpectedly succeeded on
+  test vector "random: alen=16 plen=15 authsize=16 klen=35 novrfy=1";
+  expected_error=-EBADMSG or -22, ...
+
+In a self-test run, the two bad-tag CCM decryptions returned status
+0x01000000, and the 3709 CCM and 3733 GCM decryptions with a good tag
+returned 0. A tamper test then decrypted 34 CCM messages for each ICV
+size SPU-M handles (8, 12 and 16 bytes): once unmodified, then with
+one bit flipped in each ICV byte, in the ciphertext and in the
+associated data. All 1398 modified messages returned exactly
+0x01000000, and all unmodified ones returned 0. The vendor SPU headers
+do not name this bit.
+
+Report a status with bit 24 set as an ICV mismatch.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/spu.c  | 2 ++
+ drivers/crypto/bcm/spum.h | 1 +
+ 2 files changed, 3 insertions(+)
+
+--- a/drivers/crypto/bcm/spu.c
++++ b/drivers/crypto/bcm/spu.c
+@@ -1112,6 +1112,8 @@ int spum_status_process(u8 *statp)
+ 
+ 	status = __be32_to_cpu(*(__be32 *)statp);
+ 	flow_log("SPU response STATUS %#08x\n", status);
++	if (status & SPU_STATUS_CCM_INVALID_ICV)
++		return SPU_INVALID_ICV;
+ 	if (status & SPU_STATUS_ERROR_FLAG) {
+ 		pr_err("%s() Warning: Error result from SPU: %#08x\n",
+ 		       __func__, status);
+--- a/drivers/crypto/bcm/spum.h
++++ b/drivers/crypto/bcm/spum.h
+@@ -19,6 +19,7 @@
+ #define SPU_STATUS_MASK                 0x0000FF00
+ #define SPU_STATUS_SUCCESS              0x00000000
+ #define SPU_STATUS_INVALID_ICV          0x00000100
++#define SPU_STATUS_CCM_INVALID_ICV      0x01000000
+ 
+ #define SPU_STATUS_ERROR_FLAG           0x00020000
+ 

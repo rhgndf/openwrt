@@ -1,0 +1,29 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - allow building on ARCH_BCMBCA
+
+The Broadcom BCA SoCs BCM4908, BCM63158, BCM6858, BCM47622 and BCM6756
+have an SPU-M crypto engine, fed through a PDC mailbox. The Broadcom SDK
+drives it with forks of this driver: an SPU-M only one for BCM47622
+(bcmdrivers/opensource/char/spudd/impl4), and a newer one that maps an
+SPU-M (brcm,spu_type 1, also the default) to SPU_TYPE_SPUM /
+SPU_SUBTYPE_SPUM_NS2 (spudd/impl5). That is what the "brcm,spum-crypto"
+compatible of this driver selects.
+
+Nothing in the driver is specific to iProc, so allow it on ARCH_BCMBCA.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/drivers/crypto/Kconfig
++++ b/drivers/crypto/Kconfig
+@@ -763,7 +763,7 @@ source "drivers/crypto/virtio/Kconfig"
+ 
+ config CRYPTO_DEV_BCM_SPU
+ 	tristate "Broadcom symmetric crypto/hash acceleration support"
+-	depends on ARCH_BCM_IPROC
++	depends on ARCH_BCM_IPROC || ARCH_BCMBCA
+ 	depends on MAILBOX
+ 	default m
+ 	select CRYPTO_AUTHENC

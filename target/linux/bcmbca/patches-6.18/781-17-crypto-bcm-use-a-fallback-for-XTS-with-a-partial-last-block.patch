@@ -1,0 +1,176 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - use a fallback for XTS with a partial last block
+
+XTS handles a length that is not a multiple of the block size by
+ciphertext stealing, which SPU-M does not do. The driver sends the
+request to the SPU anyway and returns a wrong result:
+
+  alg: skcipher: xts-aes-iproc encryption test failed (wrong result)
+  on test vector "random: len=33 klen=64", ...
+
+Allocate a software fallback for xts(aes), and send it these requests.
+Let the driver table set flags of a skcipher, as it does for an AEAD,
+so the XTS entry can ask for the fallback.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 69 +++++++++++++++++++++++++++++++++----
+ drivers/crypto/bcm/cipher.h |  6 +++-
+ 2 files changed, 68 insertions(+), 7 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1764,6 +1764,23 @@ cb_finish:
+  *			asynchronously
+  *	   < 0 if an error
+  */
++static int skcipher_do_fallback(struct skcipher_request *req, bool encrypt)
++{
++	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
++	struct iproc_reqctx_s *rctx = skcipher_request_ctx(req);
++	struct iproc_ctx_s *ctx = crypto_skcipher_ctx(tfm);
++	struct skcipher_request *subreq = &rctx->skcipher_req;
++
++	skcipher_request_set_tfm(subreq, ctx->fallback_skcipher);
++	skcipher_request_set_callback(subreq, skcipher_request_flags(req),
++				      req->base.complete, req->base.data);
++	skcipher_request_set_crypt(subreq, req->src, req->dst, req->cryptlen,
++				   req->iv);
++
++	return encrypt ? crypto_skcipher_encrypt(subreq) :
++			 crypto_skcipher_decrypt(subreq);
++}
++
+ static int skcipher_enqueue(struct skcipher_request *req, bool encrypt)
+ {
+ 	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+@@ -1782,6 +1799,8 @@ static int skcipher_enqueue(struct skcipher_request *req, bool encrypt)
+ 	case CIPHER_MODE_XTS:
+ 		if (req->cryptlen < AES_BLOCK_SIZE)
+ 			return -EINVAL;
++		if (!IS_ALIGNED(req->cryptlen, AES_BLOCK_SIZE))
++			return skcipher_do_fallback(req, encrypt);
+ 		break;
+ 	default:
+ 		break;
+@@ -1915,6 +1934,18 @@ static int skcipher_setkey(struct crypto_skcipher *cipher, const u8 *key,
+ 	if (err)
+ 		return err;
+ 
++	if (ctx->fallback_skcipher) {
++		crypto_skcipher_clear_flags(ctx->fallback_skcipher,
++					    CRYPTO_TFM_REQ_MASK);
++		crypto_skcipher_set_flags(ctx->fallback_skcipher,
++					  crypto_skcipher_get_flags(cipher) &
++					  CRYPTO_TFM_REQ_MASK);
++		err = crypto_skcipher_setkey(ctx->fallback_skcipher, key,
++					     keylen);
++		if (err)
++			return err;
++	}
++
+ 	memcpy(ctx->enckey, key, keylen);
+ 	ctx->enckeylen = keylen;
+ 
+@@ -3736,6 +3767,7 @@ static struct iproc_alg_s driver_algs[] = {
+ 			.base.cra_name = "xts(aes)",
+ 			.base.cra_driver_name = "xts-aes-iproc",
+ 			.base.cra_blocksize = AES_BLOCK_SIZE,
++			.base.cra_flags = CRYPTO_ALG_NEED_FALLBACK,
+ 			.min_keysize = 2 * AES_MIN_KEY_SIZE,
+ 			.max_keysize = 2 * AES_MAX_KEY_SIZE,
+ 			.ivsize = AES_BLOCK_SIZE,
+@@ -4190,6 +4222,7 @@ static int generic_cra_init(struct crypto_tfm *tfm,
+ 						    ctx->cipher.mode,
+ 						    blocksize);
+ 	ctx->fallback_cipher = NULL;
++	ctx->fallback_skcipher = NULL;
+ 
+ 	ctx->enckeylen = 0;
+ 	ctx->authkeylen = 0;
+@@ -4204,14 +4237,31 @@ static int skcipher_init_tfm(struct crypto_skcipher *skcipher)
+ {
+ 	struct crypto_tfm *tfm = crypto_skcipher_tfm(skcipher);
+ 	struct skcipher_alg *alg = crypto_skcipher_alg(skcipher);
++	struct iproc_ctx_s *ctx = crypto_tfm_ctx(tfm);
++	unsigned int reqsize = sizeof(struct iproc_reqctx_s);
+ 	struct iproc_alg_s *cipher_alg;
++	int err;
+ 
+ 	flow_log("%s()\n", __func__);
+ 
+-	crypto_skcipher_set_reqsize(skcipher, sizeof(struct iproc_reqctx_s));
+-
+ 	cipher_alg = container_of(alg, struct iproc_alg_s, alg.skcipher);
+-	return generic_cra_init(tfm, cipher_alg);
++	err = generic_cra_init(tfm, cipher_alg);
++	if (err)
++		return err;
++
++	if (alg->base.cra_flags & CRYPTO_ALG_NEED_FALLBACK) {
++		ctx->fallback_skcipher =
++			crypto_alloc_skcipher(alg->base.cra_name, 0,
++					      CRYPTO_ALG_ASYNC |
++					      CRYPTO_ALG_NEED_FALLBACK);
++		if (IS_ERR(ctx->fallback_skcipher))
++			return PTR_ERR(ctx->fallback_skcipher);
++		reqsize += crypto_skcipher_reqsize(ctx->fallback_skcipher);
++	}
++
++	crypto_skcipher_set_reqsize(skcipher, reqsize);
++
++	return 0;
+ }
+ 
+ static int ahash_cra_init(struct crypto_tfm *tfm)
+@@ -4291,7 +4341,14 @@ static void generic_cra_exit(struct crypto_tfm *tfm)
+ 
+ static void skcipher_exit_tfm(struct crypto_skcipher *tfm)
+ {
++	struct iproc_ctx_s *ctx = crypto_skcipher_ctx(tfm);
++
+ 	generic_cra_exit(crypto_skcipher_tfm(tfm));
++
++	if (ctx->fallback_skcipher) {
++		crypto_free_skcipher(ctx->fallback_skcipher);
++		ctx->fallback_skcipher = NULL;
++	}
+ }
+ 
+ static void aead_cra_exit(struct crypto_aead *aead)
+@@ -4464,9 +4521,9 @@ static int spu_register_skcipher(struct iproc_alg_s *driver_alg)
+ 	crypto->base.cra_priority = cipher_pri;
+ 	crypto->base.cra_alignmask = 0;
+ 	crypto->base.cra_ctxsize = sizeof(struct iproc_ctx_s);
+-	crypto->base.cra_flags = CRYPTO_ALG_ASYNC |
+-				 CRYPTO_ALG_ALLOCATES_MEMORY |
+-				 CRYPTO_ALG_KERN_DRIVER_ONLY;
++	crypto->base.cra_flags |= CRYPTO_ALG_ASYNC |
++				  CRYPTO_ALG_ALLOCATES_MEMORY |
++				  CRYPTO_ALG_KERN_DRIVER_ONLY;
+ 
+ 	crypto->init = skcipher_init_tfm;
+ 	crypto->exit = skcipher_exit_tfm;
+--- a/drivers/crypto/bcm/cipher.h
++++ b/drivers/crypto/bcm/cipher.h
+@@ -209,6 +209,7 @@ struct iproc_ctx_s {
+ 	unsigned int max_payload;
+ 
+ 	struct crypto_aead *fallback_cipher;
++	struct crypto_skcipher *fallback_skcipher;
+ 
+ 	/* auth_type is determined during processing of request */
+ 
+@@ -344,7 +345,10 @@ struct iproc_reqctx_s {
+ 	/* Buffers used to build SPU request and response messages */
+ 	struct spu_msg_buf msg_buf;
+ 
+-	struct aead_request req;
++	union {
++		struct aead_request req;
++		struct skcipher_request skcipher_req;
++	};
+ };
+ 
+ /*

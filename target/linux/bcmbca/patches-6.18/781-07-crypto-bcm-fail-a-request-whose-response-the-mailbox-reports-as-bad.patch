@@ -1,0 +1,38 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: bcm - fail a request whose response the mailbox reports as bad
+
+spu_rx_callback() ignores mssg->error. The FlexRM mailbox sets it for
+every response, -EIO among others when the ring is shut down, and the
+PDC mailbox now sets -EIO for a receive overflow. The callback then
+reads the status word of a response that did not arrive, and can
+complete the request as good.
+
+Complete the request with the error from the mailbox.
+
+A response without a request context also jumped to finish_req(), which
+dereferences the context. Just return: there is no request to complete.
+
+Fixes: 9d12ba86f818 ("crypto: brcm - Add Broadcom SPU driver")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/crypto/bcm/cipher.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+--- a/drivers/crypto/bcm/cipher.c
++++ b/drivers/crypto/bcm/cipher.c
+@@ -1658,10 +1658,13 @@ static void spu_rx_callback(struct mbox_client *cl, void *msg)
+ 	if (unlikely(!rctx)) {
+ 		/* This is fatal */
+ 		pr_err("%s(): no request context", __func__);
+-		err = -EFAULT;
+-		goto cb_finish;
++		return;
+ 	}
+ 
++	err = mssg->error;
++	if (unlikely(err))
++		goto cb_finish;
++
+ 	/* process the SPU status */
+ 	err = spu->spu_status_process(rctx->msg_buf.rx_stat);
+ 	if (err != 0) {

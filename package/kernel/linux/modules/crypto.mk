@@ -418,6 +418,32 @@ endef
 $(eval $(call KernelPackage,crypto-hw-atmel))
 
 
+define KernelPackage/crypto-hw-bcm-spu
+  TITLE:=Broadcom BCA SPU-M crypto engine
+  DEPENDS:=@TARGET_bcmbca +kmod-crypto-authenc +kmod-crypto-cbc \
+	+kmod-crypto-ccm +kmod-crypto-des +kmod-crypto-gcm +kmod-crypto-hash \
+	+kmod-crypto-hmac +kmod-crypto-manager +kmod-crypto-md5 \
+	+kmod-crypto-sha1 +kmod-crypto-sha256 +kmod-crypto-sha512 \
+	+kmod-crypto-xcbc +kmod-crypto-xts
+  KCONFIG:= \
+	CONFIG_CRYPTO_HW=y \
+	CONFIG_BCM_PDC_MBOX \
+	CONFIG_CRYPTO_DEV_BCM_SPU
+  FILES:= \
+	$(LINUX_DIR)/drivers/mailbox/bcm-pdc-mailbox.ko \
+	$(LINUX_DIR)/drivers/crypto/bcm/bcm_crypto_spu.ko
+  AUTOLOAD:=$(call AutoLoad,09,bcm-pdc-mailbox bcm_crypto_spu)
+  $(call AddDepends/crypto)
+endef
+
+define KernelPackage/crypto-hw-bcm-spu/description
+Kernel modules for the SPU-M crypto engine and its PDC DMA ring manager,
+found in Broadcom BCA SoCs such as BCM47622/BCM6755.
+endef
+
+$(eval $(call KernelPackage,crypto-hw-bcm-spu))
+
+
 define KernelPackage/crypto-hw-ccp
   TITLE:=AMD Cryptographic Coprocessor
   DEPENDS:= \

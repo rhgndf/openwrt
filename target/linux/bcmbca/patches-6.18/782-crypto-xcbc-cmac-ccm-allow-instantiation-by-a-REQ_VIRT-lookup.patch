@@ -1,0 +1,66 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] crypto: xcbc, cmac, ccm - allow instantiation by a REQ_VIRT lookup
+
+The core gives every async ahash without CRYPTO_ALG_REQ_VIRT a
+fallback, and crypto_ahash_init_tfm() looks the fallback up with type
+CRYPTO_ALG_REQ_VIRT. When no instance of the algorithm exists yet, the
+lookup instantiates its template with that type. The xcbc, cmac and
+cbcmac templates check the requested type against
+CRYPTO_ALG_TYPE_SHASH alone, so crypto_check_attr_type() rejects the
+REQ_VIRT bit and the instantiation fails with -EINVAL. The driver's
+tfm then cannot be allocated, unless something created the software
+instance earlier. For example, the self-test of the Broadcom SPU's
+xcbc(aes) fails:
+
+  alg: hash: failed to allocate transform for xcbc-aes-iproc: -22
+
+Creating xcbc(aes-generic) first, through AF_ALG, makes the same
+self-test pass.
+
+Every shash is registered with CRYPTO_ALG_REQ_VIRT, so check the
+requested type against CRYPTO_ALG_TYPE_SHASH | CRYPTO_ALG_REQ_VIRT.
+
+Fixes: 9d7a0ab1c753 ("crypto: ahash - Handle partial blocks in API")
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ crypto/ccm.c  | 3 ++-
+ crypto/cmac.c | 3 ++-
+ crypto/xcbc.c | 3 ++-
+ 3 files changed, 6 insertions(+), 3 deletions(-)
+
+--- a/crypto/ccm.c
++++ b/crypto/ccm.c
+@@ -852,7 +852,8 @@ static int cbcmac_create(struct crypto_template *tmpl, struct rtattr **tb)
+ 	u32 mask;
+ 	int err;
+ 
+-	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH, &mask);
++	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH |
++				     CRYPTO_ALG_REQ_VIRT, &mask);
+ 	if (err)
+ 		return err;
+ 
+--- a/crypto/cmac.c
++++ b/crypto/cmac.c
+@@ -180,7 +180,8 @@ static int cmac_create(struct crypto_template *tmpl, struct rtattr **tb)
+ 	u32 mask;
+ 	int err;
+ 
+-	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH, &mask);
++	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH |
++				     CRYPTO_ALG_REQ_VIRT, &mask);
+ 	if (err)
+ 		return err;
+ 
+--- a/crypto/xcbc.c
++++ b/crypto/xcbc.c
+@@ -132,7 +132,8 @@ static int xcbc_create(struct crypto_template *tmpl, struct rtattr **tb)
+ 	u32 mask;
+ 	int err;
+ 
+-	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH, &mask);
++	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_SHASH |
++				     CRYPTO_ALG_REQ_VIRT, &mask);
+ 	if (err)
+ 		return err;
+ 
