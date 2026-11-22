@@ -1,0 +1,46 @@
+From: Ho Jie Feng <hjf3108@gmail.com>
+Subject: [PATCH] irqchip: add Broadcom BCA external interrupt controller
+
+Broadcom BCA SoCs like BCM47622 have eight external interrupt lines, each
+wired to its own GIC SPI, that can be connected to any GPIO pin through
+a mux. Add a hierarchical irqchip for them: the hwirq is the GPIO number
+and a free line is routed to the pin when the interrupt is allocated.
+
+The driver itself lives in target/linux/bcmbca/files.
+
+Signed-off-by: Ho Jie Feng <hjf3108@gmail.com>
+---
+ drivers/irqchip/Kconfig  | 11 +++++++++++
+ drivers/irqchip/Makefile |  1 +
+ 2 files changed, 12 insertions(+)
+
+--- a/drivers/irqchip/Kconfig
++++ b/drivers/irqchip/Kconfig
+@@ -149,6 +149,17 @@
+ 	select IRQ_DOMAIN
+ 	select GENERIC_IRQ_EFFECTIVE_AFF_MASK if SMP
+ 
++config BCMBCA_EXT_IRQ
++	bool "Broadcom BCA external interrupt controller"
++	depends on ARCH_BCMBCA || COMPILE_TEST
++	default ARCH_BCMBCA
++	select IRQ_DOMAIN_HIERARCHY
++	select IRQ_FASTEOI_HIERARCHY_HANDLERS
++	help
++	  Support for the external interrupt controller of Broadcom BCA
++	  SoCs such as BCM47622, which connects GPIO pins to a few GIC
++	  interrupts.
++
+ config BCM7038_L1_IRQ
+ 	tristate "Broadcom STB 7038-style L1/L2 interrupt controller driver"
+ 	depends on ARCH_BRCMSTB || BMIPS_GENERIC
+--- a/drivers/irqchip/Makefile
++++ b/drivers/irqchip/Makefile
+@@ -69,6 +69,7 @@
+ obj-$(CONFIG_SOC_VF610)			+= irq-vf610-mscm-ir.o
+ obj-$(CONFIG_BCM2712_MIP)               += irq-bcm2712-mip.o
+ obj-$(CONFIG_BCM6345_L1_IRQ)		+= irq-bcm6345-l1.o
++obj-$(CONFIG_BCMBCA_EXT_IRQ)		+= irq-bcmbca-ext.o
+ obj-$(CONFIG_BCM7038_L1_IRQ)		+= irq-bcm7038-l1.o
+ obj-$(CONFIG_BCM7120_L2_IRQ)		+= irq-bcm7120-l2.o
+ obj-$(CONFIG_BRCMSTB_L2_IRQ)		+= irq-brcmstb-l2.o

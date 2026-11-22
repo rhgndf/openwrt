@@ -118,6 +118,22 @@
 };
 
 &{/bus@ff800000} {
+	/* The interrupt specifier is <GPIO number, trigger type> */
+	ext_intc: interrupt-controller@20 {
+		compatible = "brcm,bcm6755-ext-intc", "brcm,bcmbca-ext-intc";
+		reg = <0x20 0x2c>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		interrupts = <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 124 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
 	twd: timer-mfd@400 {
 		compatible = "brcm,bcm6755-twd", "simple-mfd", "syscon";
 		reg = <0x400 0x100>;
